@@ -39,7 +39,11 @@ data:
 model:
   type: baseline
   backbone: resnet50
-  backbone_norm: batchnorm
+  backbone_norm: batchnorm   # headline arm; groupnorm is the secondary arm
+  # null downloads them. On Kaggle, attach the weights as a dataset and point
+  # this at the /kaggle/input path. Neither available is a hard error - it is
+  # never a silent fall back to random init (CLAUDE.md sec 5).
+  imagenet_weights: null
 
 train:
   epochs: 30
@@ -47,7 +51,7 @@ train:
   lr: 0.0003
   optimizer: adamw
   weight_decay: 0.0001
-  class_weighting: none       # none | inverse_frequency | effective_number; pbc_val only
+  class_weighting: none       # none | inverse_frequency; tuned on pbc_val only
 
   # Training only, source only, and identical for baseline, bottleneck and control -
   # otherwise the three are compared across different protocols, not representations.

@@ -76,19 +76,16 @@ def class_weights_from(dataset, cfg, label_space: LabelSpace):
 
     if mode == "inverse_frequency":
         raw = {c: total / (len(present) * counts[c]) for c in present}
-    elif mode == "effective_number":
-        # Needs a beta, which is a hyperparameter and so may not be hardcoded here
-        # (CLAUDE.md sec 5). Declare train.class_weighting_beta before using this.
-        raise NotImplementedError(
-            "class_weighting: 'effective_number' needs a beta, which is a "
-            "hyperparameter and must be declared in the config first. The tuning grid "
-            "uses 'none' and 'inverse_frequency' only."
-        )
     else:
         raise ValueError(f"unknown class_weighting {mode!r}")
 
     # Normalised to mean 1 over present classes, so the loss scale stays comparable to
-    # the unweighted run. A class absent from pbc_train gets 0: it contributes no term.
+    # the unweighted run.
+    #
+    # A class absent from pbc_train gets weight 0. It has no samples, so it contributes
+    # no term to the loss and any finite weight would be equivalent; 0 avoids the
+    # division by zero that the inverse-frequency formula would otherwise produce. All
+    # five classes are present in the real pbc_train, so this only arises in fixtures.
     mean = sum(raw.values()) / len(raw)
     weights = torch.zeros(n_classes)
     for c, w in raw.items():

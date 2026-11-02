@@ -51,7 +51,11 @@ TODO_SENTINEL = "TODO_FILL"
 MODEL_TYPES = ("baseline", "bottleneck", "control")
 BACKBONE_NORMS = ("batchnorm", "groupnorm")
 ATTRIBUTE_MODES = ("soft", "hard")
-CLASS_WEIGHTINGS = ("none", "inverse_frequency", "effective_number")
+# effective_number is deliberately absent: it needs a beta, which is a hyperparameter
+# and so may not be hardcoded (CLAUDE.md sec 5). Declaring one would also widen the
+# tuning grid, which must stay identical across the three models. Add the field first
+# if it is ever wanted.
+CLASS_WEIGHTINGS = ("none", "inverse_frequency")
 
 
 class ConfigError(Exception):

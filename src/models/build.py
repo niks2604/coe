@@ -90,10 +90,20 @@ def resolve_imagenet_weights(cfg) -> dict:
 def _to_groupnorm(module: nn.Module) -> None:
     """Replace every BatchNorm2d in place with GroupNorm.
 
-    This discards the pretrained BN affine parameters and running statistics, so the
-    load becomes partial - reported, never silent. BN running statistics are source
-    statistics baked into the model and a known cause of domain-shift degradation, which
-    is why this arm exists at all (CLAUDE.md sec 6).
+    What this does and does not discard, measured rather than assumed: GroupNorm's
+    affine parameters are named weight/bias with the same per-channel shape as
+    BatchNorm's, so load_state_dict matches them and the pretrained gamma/beta are
+    REUSED. Only the 159 running-statistic buffers (running_mean, running_var,
+    num_batches_tracked across 53 layers) are dropped.
+
+    Reusing the affine parameters is a side effect of the naming, not a considered
+    choice: gamma/beta were learned to act on batch-normalised activations, and
+    GroupNorm normalises over channel groups within a single sample, so they are not
+    strictly transferable - but they are a better starting point than ones and zeros.
+
+    Dropping the running statistics is the point of this arm. They are source statistics
+    baked into the model and a known cause of domain-shift degradation (CLAUDE.md
+    sec 6).
     """
     for name, child in module.named_children():
         if isinstance(child, nn.BatchNorm2d):
@@ -115,9 +125,17 @@ def build_backbone(cfg) -> tuple[nn.Module, dict]:
         _to_groupnorm(backbone)
 
     result = backbone.load_state_dict(state, strict=False)
+    dropped_kinds: dict[str, int] = {}
+    for key in result.unexpected_keys:
+        kind = key.rsplit(".", 1)[-1]
+        dropped_kinds[kind] = dropped_kinds.get(kind, 0) + 1
     report = {
         "loaded": len(state) - len(result.unexpected_keys),
         "dropped": len(result.unexpected_keys),
+        # Which kinds were dropped matters: under groupnorm it is the running
+        # statistics only, while the pretrained affine parameters are matched by name
+        # and reused. See _to_groupnorm.
+        "dropped_kinds": dict(sorted(dropped_kinds.items())),
         "dropped_keys": sorted(result.unexpected_keys)[:20],
         "randomly_initialised": sorted(result.missing_keys)[:20],
         "n_randomly_initialised": len(result.missing_keys),

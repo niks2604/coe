@@ -126,7 +126,9 @@ def test_unknown_attribute_mode_raises(cfg, label_space):
     import torch
 
     model = build_model(cfg(), label_space)
-    logits = model(torch.zeros(1, 3, 32, 32)).attribute_logits
+    # batch 2: BatchNorm in train mode rejects a single sample, which would raise
+    # before bottleneck_vector is ever called.
+    logits = model(torch.zeros(2, 3, 32, 32)).attribute_logits
     with pytest.raises(ValueError, match="gumbel"):
         model.bottleneck_vector(logits, mode="gumbel")
 
@@ -210,13 +212,13 @@ def test_no_internet_and_no_local_weights_names_both_options(cfg, monkeypatch):
     assert "imagenet_weights" in message and "internet" in message
 
 
-def test_random_init_is_never_a_silent_fallback(cfg, monkeypatch):
+def test_random_init_is_never_a_silent_fallback(cfg, label_space, monkeypatch):
     import src.models.build as build_mod
 
     monkeypatch.setattr(build_mod, "_download_imagenet_weights",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
     with pytest.raises(WeightsUnavailableError):
-        build_model(cfg(**{"model.imagenet_weights": None}), load_label_space_weights=True)
+        build_model(cfg(**{"model.imagenet_weights": None}), label_space)
 
 
 # --- fine-tuning depth ---------------------------------------------------------------------

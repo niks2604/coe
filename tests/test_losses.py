@@ -29,7 +29,10 @@ def fake_output(label_space, batch=4):
 def fake_targets(label_space, batch=4):
     import torch
 
-    return (torch.zeros(batch, dtype=torch.long),
+    # Class targets must span classes. With every target in one class, mean-reduction
+    # cross-entropy divides by the summed weights, so a class weight vector cancels
+    # exactly and no weighting test could ever observe a difference.
+    return (torch.arange(batch, dtype=torch.long) % 5,
             torch.zeros(batch, 11, dtype=torch.long))
 
 
@@ -97,7 +100,7 @@ def test_attribute_cross_entropy_is_unweighted(cfg, label_space):
 
     torch.manual_seed(0)
     out, targets = fake_output(label_space), fake_targets(label_space)
-    weights = torch.tensor([5.0, 1.0, 1.0, 1.0, 1.0])
+    weights = torch.tensor([5.0, 1.0, 1.0, 1.0, 1.0])   # deliberately non-uniform
     _, unweighted = compute_loss(out, targets, cfg(), class_weights=None)
     _, weighted = compute_loss(out, targets, cfg(), class_weights=weights)
     assert weighted["attribute"].item() == pytest.approx(unweighted["attribute"].item())

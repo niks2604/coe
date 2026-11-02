@@ -163,6 +163,22 @@ def test_bootstrap_must_resample_domains_independently(experiment_config):
 
 # --- unknown keys and env resolution ---------------------------------------------
 
+def test_effective_number_class_weighting_is_rejected(experiment_config):
+    """Dropped from the enum: it needs a beta, which is a hyperparameter and may not be
+    hardcoded, and declaring one would widen a grid that must stay identical across the
+    three models (CLAUDE.md sec 5)."""
+    with pytest.raises(ConfigError, match="effective_number"):
+        load_config(experiment_config(**{"train.class_weighting": "effective_number"}))
+
+
+def test_only_none_and_inverse_frequency_are_accepted(experiment_config):
+    from src.config import CLASS_WEIGHTINGS
+
+    assert CLASS_WEIGHTINGS == ("none", "inverse_frequency")
+    for mode in CLASS_WEIGHTINGS:
+        load_config(experiment_config(**{"train.class_weighting": mode}))
+
+
 def test_unknown_top_level_key_is_rejected(experiment_config, tmp_path):
     path = experiment_config()
     cfg = yaml.safe_load(path.read_text())
