@@ -1,0 +1,35 @@
+# Index orderings for the label space. Committed, never derived from data at runtime.
+#
+# These lists decide what class index 0 and attribute index 0 MEAN. If they were built
+# from whatever the dataloader happened to see first, index 0 could differ between runs
+# and every confusion matrix, per-class recall and attribute metric would be
+# incomparable across runs. load_label_space() therefore treats the data's vocabulary as
+# something to CHECK against this file: a value present in the data but absent here is a
+# hard error, never a silently appended index.
+#
+# Values were measured by the 2026-11-02 audit over all three WBCAtt CSVs
+# (results/audit_20261102T112612+0000.json), which found 0 nulls, no whitespace or case
+# anomalies, and 31 values across the 11 columns.
+
+# CLAUDE.md sec 2 order - the 5-part differential as written there, not frequency or
+# alphabetical order, so the config and the protocol cannot disagree.
+classes: [neutrophil, lymphocyte, monocyte, eosinophil, basophil]
+
+# 11 columns, 31 values total. Order within each column is the audit's measured
+# descending frequency; nothing depends on it beyond reproducibility.
+#
+# Every value is quoted. Unquoted, YAML reads the strings "yes" and "no" as booleans,
+# which then never match the CSV's text and silently empty those two columns.
+attributes:
+  cell_size: ["big", "small"]
+  cell_shape: ["round", "irregular"]
+  nucleus_shape: ["segmented-bilobed", "unsegmented-band", "unsegmented-indented",
+                  "segmented-multilobed", "unsegmented-round", "irregular"]
+  nuclear_cytoplasmic_ratio: ["low", "high"]
+  chromatin_density: ["densely", "loosely"]
+  cytoplasm_vacuole: ["no", "yes"]
+  cytoplasm_texture: ["clear", "frosted"]
+  cytoplasm_colour: ["light blue", "blue", "purple blue"]
+  granule_type: ["small", "round", "nil", "coarse"]
+  granule_colour: ["pink", "red", "nil", "purple"]
+  granularity: ["yes", "no"]

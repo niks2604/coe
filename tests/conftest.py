@@ -145,6 +145,44 @@ def _paths(raw: Path) -> dict:
 
 
 @pytest.fixture
+def mapping(class_mapping_path):
+    from src.data.domains import load_class_mapping
+    return load_class_mapping(class_mapping_path)
+
+
+@pytest.fixture
+def label_space_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "configs" / "label_space.yaml"
+
+
+@pytest.fixture
+def label_space(label_space_path):
+    from src.data.label_space import load_label_space
+    return load_label_space(label_space_path)
+
+
+@pytest.fixture
+def tiny_raw_loadable(tiny_raw) -> Path:
+    """tiny_raw with the deliberately unresolvable CSV row removed.
+
+    GHOST_1.jpg exists so the audit can report a CSV row with no file, but it also makes
+    PbcWbcAttDataset refuse to build pbc_train - which is correct behaviour and is
+    tested directly. Loader tests need a tree that does build.
+    """
+    for split in ("train", "val", "test"):
+        path = tiny_raw / f"pbc_attr_v1_{split}.csv"
+        rows = list(csv.DictReader(path.open(newline="", encoding="utf-8")))
+        keep = [r for r in rows if not r["img_name"].startswith("GHOST_")]
+        if len(keep) == len(rows):
+            continue
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+            w.writeheader()
+            w.writerows(keep)
+    return tiny_raw
+
+
+@pytest.fixture
 def class_mapping_path() -> Path:
     """The real mapping file; it is the single source of truth, so tests use it."""
     return Path(__file__).resolve().parents[1] / "configs" / "class_mapping.yaml"
@@ -175,6 +213,8 @@ def experiment_dict(raw: Path, mapping: Path, **overrides) -> dict:
         "paths": _paths(raw),
         "data": {
             "class_mapping": str(mapping),
+            "label_space": str(Path(__file__).resolve().parents[1] / "configs"
+                               / "label_space.yaml"),
             "source": "pbc_wbcatt",
             "image_size": 224,
             "subset_n_images": None,
@@ -192,6 +232,13 @@ def experiment_dict(raw: Path, mapping: Path, **overrides) -> dict:
             "optimizer": "adamw",
             "weight_decay": 0.0001,
             "class_weighting": "none",
+            "augmentation": {
+                "hflip": 0.5,
+                "vflip": 0.5,
+                "rotation_degrees": 180,
+                "color_jitter": {"brightness": 0.1, "contrast": 0.1,
+                                 "saturation": 0.1, "hue": 0.02},
+            },
             "early_stopping": {"metric": "macro_f1", "patience": 5, "split": "pbc_val"},
         },
         "eval": {
