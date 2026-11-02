@@ -206,3 +206,41 @@ def test_cli_rejects_an_empty_override_reason(trained, tmp_path):
     with pytest.raises(SystemExit):
         main(["--checkpoint", str(path), "--override-reason", "",
               "--ledger", str(tmp_path / "l.jsonl")])
+
+
+# --- a dry run must not open a single out-of-domain file ---------------------------
+
+def test_dry_run_opens_no_file_under_the_target_root(trained, tmp_path, monkeypatch):
+    """Stronger than checking which domains were scored: every image read in
+    src.data.datasets goes through _load_rgb, so recording its argument proves nothing
+    outside the source split was opened at all."""
+    import src.data.datasets as datasets_mod
+
+    cfg, path = trained
+    opened: list[str] = []
+    original = datasets_mod._load_rgb
+
+    def recording(p):
+        opened.append(str(p))
+        return original(p)
+
+    monkeypatch.setattr(datasets_mod, "_load_rgb", recording)
+    evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl", dry_run=True)
+
+    target_root = str(cfg.paths.raabin_root)
+    assert opened, "the dry run opened no images at all"
+    assert not [p for p in opened if p.startswith(target_root)]
+
+
+def test_full_run_does_open_the_target_root(trained, tmp_path, monkeypatch):
+    """The companion check: the recorder would notice if it did, so the test above is
+    not vacuously true."""
+    import src.data.datasets as datasets_mod
+
+    cfg, path = trained
+    opened: list[str] = []
+    original = datasets_mod._load_rgb
+    monkeypatch.setattr(datasets_mod, "_load_rgb",
+                        lambda p: (opened.append(str(p)), original(p))[1])
+    evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl")
+    assert [p for p in opened if p.startswith(str(cfg.paths.raabin_root))]
