@@ -154,6 +154,8 @@ class TrainCfg:
     weight_decay: float
     class_weighting: str
     augmentation: dict
+    lr_schedule: str
+    warmup_epochs: int
     early_stopping: dict
 
 
@@ -295,7 +297,19 @@ DATA_KEYS = {"class_mapping", "label_space", "source", "image_size",
              "subset_n_images", "normalization"}
 MODEL_KEYS = {"type", "backbone", "backbone_norm", "imagenet_weights"}
 TRAIN_KEYS = {"epochs", "batch_size", "lr", "optimizer", "weight_decay",
-              "class_weighting", "augmentation", "early_stopping"}
+              "class_weighting", "augmentation", "lr_schedule", "warmup_epochs",
+              "early_stopping"}
+# The schedule is protocol, not a hyperparameter: AdamW with a cosine decay and a short
+# linear warmup, identical across the three models and never tuned (CLAUDE.md sec 5).
+# Both fields are optional so the effective value is always recorded in the resolved
+# config even where a config predates them; the real experiment YAMLs state them.
+TRAIN_REQUIRED = TRAIN_KEYS - {"lr_schedule", "warmup_epochs"}
+LR_SCHEDULES = ("cosine",)
+OPTIMIZERS = ("adamw",)
+# 0, not 1: the protocol's warmup length is declared in the experiment YAMLs, and a
+# non-zero default here would be a hyperparameter smuggled into Python (sec 5). It also
+# keeps short runs valid, since warmup must be shorter than the run.
+DEFAULT_WARMUP_EPOCHS = 0
 AUGMENTATION_KEYS = {"hflip", "vflip", "rotation_degrees", "color_jitter"}
 JITTER_KEYS = {"brightness", "contrast", "saturation", "hue"}
 # Stain colour variation IS the shift between PBC and a different lab, so jitter
@@ -436,7 +450,7 @@ def _build_bottleneck(doc: dict, model_type: str) -> BottleneckCfg | None:
 
 
 def _build_train(doc: dict) -> TrainCfg:
-    node = _check_keys(doc["train"], TRAIN_KEYS, TRAIN_KEYS, "train")
+    node = _check_keys(doc["train"], TRAIN_KEYS, TRAIN_REQUIRED, "train")
     _check_no_target_under_train(node)
 
     for key, kind in (("epochs", int), ("batch_size", int)):
@@ -447,6 +461,25 @@ def _build_train(doc: dict) -> TrainCfg:
             float(node[key])
         except (TypeError, ValueError):
             raise ConfigError(f"train.{key}: expected a float") from None
+    if node["optimizer"] not in OPTIMIZERS:
+        raise ConfigError(
+            f"train.optimizer: {node['optimizer']!r} is not one of {list(OPTIMIZERS)}; "
+            f"the optimizer is fixed a priori and identical across models."
+        )
+    schedule = node.get("lr_schedule", "cosine")
+    if schedule not in LR_SCHEDULES:
+        raise ConfigError(
+            f"train.lr_schedule: {schedule!r} is not one of {list(LR_SCHEDULES)}; the "
+            f"schedule is fixed a priori and is not tuned."
+        )
+    warmup = node.get("warmup_epochs", DEFAULT_WARMUP_EPOCHS)
+    if not isinstance(warmup, int) or isinstance(warmup, bool) or warmup < 0:
+        raise ConfigError("train.warmup_epochs: expected a non-negative int")
+    if warmup >= node["epochs"]:
+        raise ConfigError(
+            f"train.warmup_epochs ({warmup}) must be less than train.epochs "
+            f"({node['epochs']}); otherwise the cosine decay never runs."
+        )
     if node["class_weighting"] not in CLASS_WEIGHTINGS:
         raise ConfigError(
             f"train.class_weighting: {node['class_weighting']!r} is not one of "
@@ -520,6 +553,8 @@ def _build_train(doc: dict) -> TrainCfg:
         weight_decay=float(node["weight_decay"]),
         class_weighting=node["class_weighting"],
         augmentation=augmentation,
+        lr_schedule=schedule,
+        warmup_epochs=warmup,
         early_stopping=dict(es),
     )
 
@@ -673,6 +708,8 @@ def load_config(path: str | Path) -> Config:
             "optimizer": train.optimizer, "weight_decay": train.weight_decay,
             "class_weighting": train.class_weighting,
             "augmentation": train.augmentation,
+            "lr_schedule": train.lr_schedule,
+            "warmup_epochs": train.warmup_epochs,
             "early_stopping": train.early_stopping,
         },
         "eval": {

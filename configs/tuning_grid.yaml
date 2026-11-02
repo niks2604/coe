@@ -1,0 +1,24 @@
+# The tuning grid. Pre-declared, committed, and run identically for all three models.
+#
+# Equal search budget is what makes baseline, bottleneck and control comparable at all.
+# So this file holds only hyperparameters that exist for every model type. Three things
+# are deliberately absent (CLAUDE.md sec 5):
+#
+#   attribute_loss_weight  exists only for the bottleneck. Tuning it would hand the
+#                          bottleneck a larger search budget than the baseline, which
+#                          is a thumb on the scale toward the hypothesis. Fixed at 1.0;
+#                          any exploration is a separate, labelled sweep.
+#   the schedule            AdamW + cosine + warmup, fixed a priori, not tuned.
+#   augmentation            fixed a priori, with the colour-jitter caps in src/config.py.
+#   backbone_norm           two pre-declared arms, not a tuned axis.
+#
+# Selection is on pbc_val macro-F1 at a single seed. 3 x 2 x 2 = 12 trials per model.
+
+axes:
+  lr: [1.0e-4, 3.0e-4, 1.0e-3]
+  weight_decay: [1.0e-5, 1.0e-4]
+  class_weighting: [none, inverse_frequency]
+
+# Applied in order when two trials tie on pbc_val macro-F1. With 12 trials near-ties are
+# likely, and "whichever came first" is a choice made after seeing the numbers.
+tie_break: [lr_asc, weight_decay_asc, class_weighting_asc]

@@ -56,8 +56,10 @@ train:
   epochs: 30
   batch_size: 32
   lr: 0.0003
-  optimizer: adamw
+  optimizer: adamw            # fixed a priori; not a tuned axis
   weight_decay: 0.0001
+  lr_schedule: cosine         # cosine decay after a short linear warmup
+  warmup_epochs: 2            # identical across all three models, never tuned
   class_weighting: none       # none | inverse_frequency; tuned on pbc_val only
 
   # Training only, source only, and identical for baseline, bottleneck and control -
