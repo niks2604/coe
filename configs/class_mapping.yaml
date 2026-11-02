@@ -5,10 +5,20 @@
 #   pbc     top-level folder name in data/raw/PBC_dataset_normal_DIB/
 #   wbcatt  `label` column of data/raw/pbc_attr_v1_{train,val,test}.csv
 #   lisc    filename prefix before the first "_" in data/raw/LISC/{Train,Test}/
-#   raabin  TODO - not downloaded yet; any Raabin class is unmapped until added here
+#   raabin  class folder name under data/raw/raabin_double_labeled/{Train,TestA,TestB}/
+#           TODO - added only after the audit report has been reviewed. Until then every
+#           Raabin class is unmapped, which is a hard error in resolve_class() and is
+#           reported (not raised) by the audit.
 #
 # Matching is exact and case-sensitive. A class name found in the data that is not
 # listed exactly once, under one of the five classes or under `excluded`, is a hard error.
+# Enforced by src/data/domains.py: load_class_mapping() rejects a key listed twice, and
+# resolve_class() raises UnmappedClass for anything unlisted - including names under
+# `excluded`, which must be filtered out before classes are resolved. There is no
+# implicit drop. The audit uses lookup_class(), which reports instead of raising.
+#
+# All three Raabin splits - including the one named Train - are TARGET data. The domain
+# of every dataset id is declared in src/data/domains.py, never inferred from a path.
 
 neutrophil:
   # PBC's folder mixes band (BNE_*, 1,633), segmented (SNE_*, 1,646) and unsubtyped

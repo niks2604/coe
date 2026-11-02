@@ -1,0 +1,28 @@
+# Read-only data audit. Run: python -m src.data.audit --config configs/audit.yaml
+#
+# This config holds paths and nothing else: the audit makes no decisions, so it has no
+# hyperparameters. Layout follows scripts/extract_raw.py, which unpacks into data/raw/.
+
+env: local
+seed: 0
+
+paths:
+  local:
+    pbc_images: data/raw/PBC_dataset_normal_DIB
+    wbcatt_dir: data/raw                       # pbc_attr_v1_{train,val,test}.csv
+    raabin_root: data/raw/raabin_double_labeled
+    lisc_root: data/raw/LISC                   # may be absent; reported, not fatal
+    results_dir: results
+  kaggle:
+    # Fill in the dataset slugs before running with env: kaggle. TODO_FILL fails
+    # validation loudly rather than silently resolving to a wrong path.
+    pbc_images: TODO_FILL
+    wbcatt_dir: TODO_FILL
+    raabin_root: TODO_FILL
+    lisc_root: TODO_FILL
+    results_dir: /kaggle/working/results       # the one permitted write outside the repo
+
+audit:
+  class_mapping: configs/class_mapping.yaml
+  verify_images: true    # open every image and convert to RGB; lists failures
+  tree_max_depth: 3

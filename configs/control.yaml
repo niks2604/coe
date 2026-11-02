@@ -1,0 +1,79 @@
+# Control: identical architecture to the bottleneck - same backbone, same 11 heads
+# with the same 31 outputs, same downstream classifier - with the attribute loss
+# weighted 0. Isolates the effect of attribute SUPERVISION from the effect of the
+# narrow architecture, so a bottleneck gain cannot be credited to the shape of the
+# network alone.
+#
+# Run: python -m src.train --config configs/control.yaml
+# One file fully specifies the experiment (CLAUDE.md sec 5). No includes: a config is
+# read as-is, and the fully resolved copy is embedded in results/<run_id>.json.
+#
+# Reported numbers are the mean +/- std over 3 seeds. Change `seed` per run; nothing
+# else differs between seeds.
+
+run_id: control
+
+env: local
+seed: 0
+
+paths:
+  local:
+    pbc_images: data/raw/PBC_dataset_normal_DIB
+    wbcatt_dir: data/raw
+    raabin_root: data/raw/raabin_double_labeled
+    lisc_root: data/raw/LISC
+    results_dir: results
+  kaggle:
+    pbc_images: TODO_FILL
+    wbcatt_dir: TODO_FILL
+    raabin_root: TODO_FILL
+    lisc_root: TODO_FILL
+    results_dir: /kaggle/working/results
+
+data:
+  class_mapping: configs/class_mapping.yaml
+  source: pbc_wbcatt          # the 10,298 WBCAtt-labelled PBC images, WBCAtt's splits
+  image_size: 224
+  subset_n_images: null       # set to 500 for the sec 7 smoke test
+  normalization:              # fixed ImageNet constants, never computed from data
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+model:
+  type: control
+  backbone: resnet50
+  backbone_norm: batchnorm
+
+bottleneck:
+  attribute_loss_weight: 0.0   # must be exactly 0 for the control
+
+train:
+  epochs: 30
+  batch_size: 32
+  lr: 0.0003
+  optimizer: adamw
+  weight_decay: 0.0001
+  class_weighting: none       # none | inverse_frequency | effective_number; pbc_val only
+  early_stopping:
+    metric: macro_f1
+    patience: 5
+    split: pbc_val            # the only split any tuning decision may read
+
+eval:
+  # Three separate Raabin domains; no pooled Raabin headline number.
+  domains: [pbc_test, raabin_train, raabin_testA, raabin_testB, lisc]
+  attribute_modes: [soft, hard]
+
+  secondary_subsets: [pbc_test_no_band_neutrophils]
+  abstention:
+    threshold_split: pbc_val  # the threshold is chosen on source val, never on target
+    coverage_grid: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+  ece_bins: 15
+  macro_f1_over: present_classes   # raabin_testB has 2 of 5 classes; see src/config.py
+
+bootstrap:
+  enabled: true
+  n: 2000
+  ci: 0.95
+  stratify_by: class
+  resample_domains_independently: true

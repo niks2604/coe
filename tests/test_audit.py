@@ -224,3 +224,40 @@ def test_report_embeds_the_resolved_config(report):
 def test_report_is_json_round_trippable(report):
     rep, _ = report
     assert json.loads(json.dumps(rep))["audit_version"] == rep["audit_version"]
+
+
+# --- regressions -----------------------------------------------------------------------
+
+def test_present_attribute_columns_are_not_reported_missing(report):
+    """Regression: `set(A) | {x} - set(header)` parses as `set(A) | ({x} - header)`,
+    so every attribute column was reported missing even when present."""
+    rep, _ = report
+    assert rep["source"]["wbcatt"]["missing_columns"] == []
+
+
+def test_missing_columns_are_still_detected(tmp_path, audit_config, tiny_raw):
+    """The other direction: a genuinely absent column must be reported."""
+    import csv
+
+    path = tiny_raw / "pbc_attr_v1_train.csv"
+    rows = list(csv.DictReader(path.open(newline="", encoding="utf-8")))
+    fields = [f for f in rows[0] if f != "granularity"]
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    rep, _ = run_audit(audit_config)
+    assert rep["source"]["wbcatt"]["missing_columns"] == ["granularity"]
+
+
+def test_join_counts_every_file_on_disk_not_unique_filenames(report):
+    """Regression: on-disk images were keyed by filename, so DUPE_1.jpg counted once
+    and n_on_disk understated the archive."""
+    rep, _ = report
+    assert rep["source"]["join"]["n_on_disk"] == rep["source"]["pbc"]["n_images"]
+
+
+def test_join_reports_both_copies_of_a_duplicated_filename(report):
+    rep, _ = report
+    on_disk_only = rep["source"]["join"]["on_disk_only"]
+    assert sum("DUPE_1.jpg" in p for p in on_disk_only) == 2
