@@ -144,6 +144,25 @@ def _paths(raw: Path) -> dict:
     }
 
 
+@pytest.fixture(scope="session", autouse=True)
+def repo_ledger_snapshot():
+    """Guard: the committed repo-root ledger must survive the test run untouched.
+
+    Every test writes to a temp ledger. If one ever defaulted to LEDGER_PATH it would
+    silently burn a real entry and make a later genuine evaluation refuse itself, so the
+    bytes are compared at session start and session end.
+    """
+    from src.ledger import LEDGER_PATH
+
+    before = LEDGER_PATH.read_bytes() if LEDGER_PATH.exists() else None
+    yield before
+    after = LEDGER_PATH.read_bytes() if LEDGER_PATH.exists() else None
+    assert after == before, (
+        f"{LEDGER_PATH} was modified by the test run. Tests must always pass an "
+        f"explicit temp ledger path."
+    )
+
+
 @pytest.fixture
 def mapping(class_mapping_path):
     from src.data.domains import load_class_mapping

@@ -107,8 +107,17 @@ def test_ece_on_a_hand_worked_two_bin_case():
 
 
 def test_ece_uses_the_configured_bin_count():
-    a = expected_calibration_error([0.3, 0.7], [False, True], n_bins=2)
-    b = expected_calibration_error([0.3, 0.7], [False, True], n_bins=15)
+    """0.6 and 0.9 share the bin [0.5, 1.0] at n_bins=2 and separate at n_bins=15, so
+    the bin width actually changes the answer. Confidences that fall in distinct bins at
+    both counts would give the same number either way and test nothing.
+
+    n_bins=2:  pooled, mean conf 0.75 vs accuracy 0.5      -> 0.25
+    n_bins=15: separate, |0.6-0|*0.5 + |0.9-1|*0.5          -> 0.35
+    """
+    a = expected_calibration_error([0.6, 0.9], [False, True], n_bins=2)
+    b = expected_calibration_error([0.6, 0.9], [False, True], n_bins=15)
+    assert a == pytest.approx(0.25)
+    assert b == pytest.approx(0.35)
     assert a != b
 
 

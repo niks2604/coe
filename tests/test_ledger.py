@@ -187,3 +187,25 @@ def test_the_committed_ledger_lives_at_the_repo_root():
 
     assert LEDGER_PATH.name == "target_eval_ledger.jsonl"
     assert LEDGER_PATH.parent.name == "wbc-attributes"
+
+
+def test_the_repo_root_ledger_is_untouched_by_the_test_run(repo_ledger_snapshot):
+    """Checked mid-run as well as at session teardown, so a failure points at the test
+    that caused it rather than only at the end of the session."""
+    from src.ledger import LEDGER_PATH
+
+    current = LEDGER_PATH.read_bytes() if LEDGER_PATH.exists() else None
+    assert current == repo_ledger_snapshot
+
+
+def test_the_repo_root_ledger_exists_and_is_committed():
+    """It is committed so the history of held-out evaluations lives in git."""
+    import subprocess
+
+    from src.config import REPO_ROOT
+    from src.ledger import LEDGER_PATH
+
+    assert LEDGER_PATH.exists()
+    tracked = subprocess.run(["git", "ls-files", "--error-unmatch", LEDGER_PATH.name],
+                             cwd=REPO_ROOT, capture_output=True, text=True)
+    assert tracked.returncode == 0, f"{LEDGER_PATH.name} is not tracked by git"

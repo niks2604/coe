@@ -1,0 +1,108 @@
+# Smoke test (CLAUDE.md sec 7): 500 images, 2 epochs, CPU, before any full run.
+#
+# Everything here matches configs/bottleneck.yaml except subset_n_images, epochs,
+# batch_size and warmup_epochs. image_size stays 224: a smaller one would smoke-test
+# a different model than the one that runs. Change model.type to smoke the other two.
+#
+# Run:  python -m src.train --config configs/smoke.yaml
+#       python -m src.eval --checkpoint results/smoke_seed0/best.pt --dry-run
+# The dry run evaluates pbc_val only and writes no ledger entry.
+#
+# Run: python -m src.train --config configs/bottleneck.yaml
+# One file fully specifies the experiment (CLAUDE.md sec 5). No includes: a config is
+# read as-is, and the fully resolved copy is embedded in results/<run_id>.json.
+#
+# Reported numbers are the mean +/- std over 3 seeds. Change `seed` per run; nothing
+# else differs between seeds.
+
+run_id: smoke_control
+
+env: local
+seed: 0
+
+paths:
+  local:
+    pbc_images: data/raw/PBC_dataset_normal_DIB
+    wbcatt_dir: data/raw
+    raabin_root: data/raw/raabin_double_labeled
+    lisc_root: data/raw/LISC
+    results_dir: results
+  kaggle:
+    pbc_images: TODO_FILL
+    wbcatt_dir: TODO_FILL
+    raabin_root: TODO_FILL
+    lisc_root: TODO_FILL
+    results_dir: /kaggle/working/results
+
+data:
+  class_mapping: configs/class_mapping.yaml
+  label_space: configs/label_space.yaml   # fixes what class/attribute index 0 MEANS
+  source: pbc_wbcatt          # the 10,298 WBCAtt-labelled PBC images, WBCAtt's splits
+  image_size: 224
+  subset_n_images: 500        # class-stratified; every class stays present
+  normalization:              # fixed ImageNet constants, never computed from data
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+model:
+  type: control
+  backbone: resnet50
+  backbone_norm: batchnorm   # headline arm; groupnorm is the secondary arm
+  # null downloads them. On Kaggle, attach the weights as a dataset and point
+  # this at the /kaggle/input path. Neither available is a hard error - it is
+  # never a silent fall back to random init (CLAUDE.md sec 5).
+  imagenet_weights: null
+
+bottleneck:
+  attribute_loss_weight: 0.0   # must be exactly 0 for the control
+
+train:
+  epochs: 2
+  batch_size: 16
+  lr: 0.0003
+  optimizer: adamw            # fixed a priori; not a tuned axis
+  weight_decay: 0.0001
+  lr_schedule: cosine         # cosine decay after a short linear warmup
+  warmup_epochs: 1            # must be < epochs; 2 epochs leaves room for 1
+  class_weighting: none       # none | inverse_frequency; tuned on pbc_val only
+
+  # Training only, source only, and identical for baseline, bottleneck and control -
+  # otherwise the three are compared across different protocols, not representations.
+  # Blood smears have no canonical orientation, so flips and full rotation preserve
+  # both the class and all 11 attributes.
+  augmentation:
+    hflip: 0.5
+    vflip: 0.5
+    rotation_degrees: 180
+    # Stain colour variation IS the shift being measured, so these are fixed a priori
+    # and never tuned; src/config.py caps them. Raising a cap is a protocol change.
+    color_jitter:
+      brightness: 0.1
+      contrast: 0.1
+      saturation: 0.1
+      hue: 0.02
+
+  early_stopping:
+    metric: macro_f1
+    patience: 2
+    split: pbc_val            # the only split any tuning decision may read
+
+eval:
+  # Three separate Raabin domains; no pooled Raabin headline number.
+  # LISC was never obtained and is out of scope (CLAUDE.md sec 2).
+  domains: [pbc_test, raabin_train, raabin_testA, raabin_testB]
+  attribute_modes: [soft, hard]
+
+  secondary_subsets: [pbc_test_no_band_neutrophils]
+  abstention:
+    threshold_split: pbc_val  # the threshold is chosen on source val, never on target
+    coverage_grid: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+  ece_bins: 15
+  macro_f1_over: present_classes   # raabin_testB has 2 of 5 classes; see src/config.py
+
+bootstrap:
+  enabled: true
+  n: 50                     # smoke only; the real runs use 2000
+  ci: 0.95
+  stratify_by: class
+  resample_domains_independently: true

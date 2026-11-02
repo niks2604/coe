@@ -189,8 +189,10 @@ def test_unknown_top_level_key_is_rejected(experiment_config, tmp_path):
 
 
 def test_unknown_nested_key_is_rejected(experiment_config):
-    path = experiment_config(**{"train.lr_schedule": "cosine"})
-    with pytest.raises(ConfigError, match="lr_schedule"):
+    """train.momentum: AdamW has no momentum field, so this can never become real.
+    The previous example, train.lr_schedule, is now a declared field."""
+    path = experiment_config(**{"train.momentum": 0.9})
+    with pytest.raises(ConfigError, match="momentum"):
         load_config(path)
 
 
@@ -300,3 +302,53 @@ def test_audit_config_rejects_unknown_keys(audit_config):
     audit_config.write_text(yaml.safe_dump(cfg))
     with pytest.raises(ConfigError, match="compute_mean_std"):
         load_audit_config(audit_config)
+
+
+# --- the committed experiment YAMLs state the protocol fields explicitly ----------
+
+EXPERIMENT_YAMLS = ("baseline.yaml", "bottleneck.yaml", "control.yaml",
+                    "smoke.yaml", "smoke_baseline.yaml", "smoke_control.yaml")
+
+
+def _configs_dir():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1] / "configs"
+
+
+@pytest.mark.parametrize("name", EXPERIMENT_YAMLS)
+def test_experiment_yaml_states_the_schedule_explicitly(name):
+    """lr_schedule and warmup_epochs are optional in the schema so short test configs
+    stay valid, but every committed experiment must state them: the protocol's warmup
+    length belongs in the config, not in a Python default (CLAUDE.md sec 5)."""
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert "lr_schedule" in doc["train"], f"{name} does not state train.lr_schedule"
+    assert "warmup_epochs" in doc["train"], f"{name} does not state train.warmup_epochs"
+
+
+@pytest.mark.parametrize("name", EXPERIMENT_YAMLS)
+def test_experiment_yaml_states_imagenet_weights_explicitly(name):
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert "imagenet_weights" in doc["model"]
+
+
+@pytest.mark.parametrize("name", EXPERIMENT_YAMLS)
+def test_experiment_yaml_loads(name):
+    load_config(_configs_dir() / name)
+
+
+def test_the_three_headline_configs_share_every_protocol_field():
+    """Differences between the three models must come from the representation, not the
+    protocol (CLAUDE.md sec 5)."""
+    docs = {n: yaml.safe_load((_configs_dir() / n).read_text())
+            for n in ("baseline.yaml", "bottleneck.yaml", "control.yaml")}
+    for field in ("optimizer", "lr_schedule", "warmup_epochs", "epochs", "batch_size",
+                  "lr", "weight_decay", "class_weighting", "augmentation",
+                  "early_stopping"):
+        values = {n: doc["train"][field] for n, doc in docs.items()}
+        assert len(set(map(str, values.values()))) == 1, f"train.{field} differs: {values}"
+    for field in ("image_size", "normalization", "source", "subset_n_images"):
+        values = {n: doc["data"][field] for n, doc in docs.items()}
+        assert len(set(map(str, values.values()))) == 1, f"data.{field} differs: {values}"
+    for n, doc in docs.items():
+        assert doc["model"]["backbone"] == "resnet50"
+        assert doc["model"]["backbone_norm"] == "batchnorm", f"{n} is not the headline arm"
