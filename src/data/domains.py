@@ -188,6 +188,16 @@ def assert_tuning_split(dataset_id: str) -> None:
         )
 
 
+def filename_prefix(img_name: str) -> str:
+    """"SNE_123.jpg" -> "SNE_". Names with no underscore have no prefix.
+
+    Shared by the audit and the secondary-subset view so the two cannot disagree about
+    what a prefix is - the band-neutrophil subset is defined by exactly this.
+    """
+    head, sep, _ = img_name.partition("_")
+    return head + sep if sep else ""
+
+
 # --- class mapping -------------------------------------------------------------------
 
 @dataclass

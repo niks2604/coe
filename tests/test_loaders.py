@@ -153,3 +153,20 @@ def test_subset_does_not_apply_to_target_domains(experiment_config, tiny_raw_loa
     n_full = len(make_eval_loader(full, "raabin_testB", mapping, label_space).dataset)
     n_small = len(make_eval_loader(small, "raabin_testB", mapping, label_space).dataset)
     assert n_small == n_full
+
+
+# --- collating target batches, which have no attribute labels -------------------------
+
+def test_target_batch_has_no_attribute_tensor(ready):
+    """Target data has no attribute labels, so the batch's attribute slot is None.
+    torch's default collate rejects None, so the loaders supply their own."""
+    cfg, mapping, ls = ready
+    images, classes, attrs = next(iter(make_eval_loader(cfg, "raabin_testB", mapping, ls)))
+    assert attrs is None
+    assert images.shape[0] == classes.shape[0]
+
+
+def test_source_batch_has_an_eleven_wide_attribute_tensor(ready):
+    cfg, mapping, ls = ready
+    images, classes, attrs = next(iter(make_train_loader(cfg, mapping, ls)))
+    assert attrs.shape == (images.shape[0], 11)

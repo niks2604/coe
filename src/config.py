@@ -26,6 +26,7 @@ from typing import Any
 
 import yaml
 
+from src.data.label_space import LabelSpace, load_label_space
 from src.data.domains import (
     DATASETS,
     TUNING_SPLIT,
@@ -117,6 +118,7 @@ class AuditSettings:
 class DataCfg:
     class_mapping: ClassMapping
     class_mapping_path: Path
+    label_space: LabelSpace
     source: str
     image_size: int
     subset_n_images: int | None
@@ -143,6 +145,7 @@ class TrainCfg:
     optimizer: str
     weight_decay: float
     class_weighting: str
+    augmentation: dict
     early_stopping: dict
 
 
@@ -280,10 +283,17 @@ EXP_TOP = {"run_id", "env", "seed", "paths", "data", "model", "bottleneck",
            "train", "eval", "bootstrap"}
 EXP_REQUIRED = EXP_TOP - {"bottleneck"}
 
-DATA_KEYS = {"class_mapping", "source", "image_size", "subset_n_images", "normalization"}
+DATA_KEYS = {"class_mapping", "label_space", "source", "image_size",
+             "subset_n_images", "normalization"}
 MODEL_KEYS = {"type", "backbone", "backbone_norm"}
 TRAIN_KEYS = {"epochs", "batch_size", "lr", "optimizer", "weight_decay",
-              "class_weighting", "early_stopping"}
+              "class_weighting", "augmentation", "early_stopping"}
+AUGMENTATION_KEYS = {"hflip", "vflip", "rotation_degrees", "color_jitter"}
+JITTER_KEYS = {"brightness", "contrast", "saturation", "hue"}
+# Stain colour variation IS the shift between PBC and a different lab, so jitter
+# strength is the one augmentation knob that cannot be tuned without effectively tuning
+# on the target. It is capped here and fixed a priori (CLAUDE.md sec 3).
+JITTER_CAPS = {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.05}
 EARLY_STOP_KEYS = {"metric", "patience", "split"}
 EVAL_KEYS = {"domains", "attribute_modes", "secondary_subsets", "abstention",
              "ece_bins", "macro_f1_over"}
@@ -310,6 +320,11 @@ def _build_data(doc: dict) -> tuple[DataCfg, dict]:
         raise ConfigError(f"data.class_mapping: not found: {mapping_path}")
     mapping = load_class_mapping(mapping_path)
 
+    ls_path = _resolve_path(node["label_space"], "data.label_space")
+    if not ls_path.exists():
+        raise ConfigError(f"data.label_space: not found: {ls_path}")
+    label_space = load_label_space(ls_path)
+
     if node["source"] != "pbc_wbcatt":
         raise ConfigError(
             f"data.source: {node['source']!r} is not supported; the source domain is "
@@ -335,6 +350,7 @@ def _build_data(doc: dict) -> tuple[DataCfg, dict]:
     cfg = DataCfg(
         class_mapping=mapping,
         class_mapping_path=mapping_path,
+        label_space=label_space,
         source=node["source"],
         image_size=node["image_size"],
         subset_n_images=subset,
@@ -343,6 +359,9 @@ def _build_data(doc: dict) -> tuple[DataCfg, dict]:
     resolved = {
         "class_mapping": mapping.raw,
         "class_mapping_path": str(mapping_path),
+        "label_space": {"classes": label_space.classes,
+                        "attributes": label_space.attributes},
+        "label_space_path": str(ls_path),
         "source": cfg.source,
         "image_size": cfg.image_size,
         "subset_n_images": cfg.subset_n_images,
@@ -422,6 +441,43 @@ def _build_train(doc: dict) -> TrainCfg:
             f"{list(CLASS_WEIGHTINGS)}"
         )
 
+    aug = _check_keys(node["augmentation"], AUGMENTATION_KEYS, AUGMENTATION_KEYS,
+                      "train.augmentation")
+    for key in ("hflip", "vflip"):
+        value = aug[key]
+        if not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
+            raise ConfigError(f"train.augmentation.{key}: expected a probability in [0, 1]")
+    degrees = aug["rotation_degrees"]
+    if not isinstance(degrees, (int, float)) or not 0 <= float(degrees) <= 180:
+        raise ConfigError("train.augmentation.rotation_degrees: expected 0..180")
+
+    jitter = aug["color_jitter"]
+    if jitter is not None:
+        jitter = _check_keys(jitter, JITTER_KEYS, JITTER_KEYS,
+                             "train.augmentation.color_jitter")
+        for key, cap in JITTER_CAPS.items():
+            value = jitter[key]
+            if not isinstance(value, (int, float)) or float(value) < 0:
+                raise ConfigError(
+                    f"train.augmentation.color_jitter.{key}: expected a non-negative float")
+            if float(value) > cap:
+                raise ConfigError(
+                    f"train.augmentation.color_jitter.{key}={value} exceeds the cap "
+                    f"{cap}. Stain colour variation is the domain shift being measured, "
+                    f"so raising jitter strength is target-informed tuning in disguise. "
+                    f"These values are fixed a priori and are not tuned (CLAUDE.md "
+                    f"sec 3). Raising the cap is a protocol change: flag it and log it "
+                    f"in sec 8."
+                )
+        jitter = {k: float(jitter[k]) for k in sorted(JITTER_KEYS)}
+
+    augmentation = {
+        "hflip": float(aug["hflip"]),
+        "vflip": float(aug["vflip"]),
+        "rotation_degrees": float(degrees),
+        "color_jitter": jitter,
+    }
+
     es = _check_keys(node["early_stopping"], EARLY_STOP_KEYS, EARLY_STOP_KEYS,
                      "train.early_stopping")
     split = es["split"]
@@ -451,6 +507,7 @@ def _build_train(doc: dict) -> TrainCfg:
         optimizer=node["optimizer"],
         weight_decay=float(node["weight_decay"]),
         class_weighting=node["class_weighting"],
+        augmentation=augmentation,
         early_stopping=dict(es),
     )
 
@@ -602,6 +659,7 @@ def load_config(path: str | Path) -> Config:
             "epochs": train.epochs, "batch_size": train.batch_size, "lr": train.lr,
             "optimizer": train.optimizer, "weight_decay": train.weight_decay,
             "class_weighting": train.class_weighting,
+            "augmentation": train.augmentation,
             "early_stopping": train.early_stopping,
         },
         "eval": {

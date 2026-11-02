@@ -30,8 +30,9 @@ def make_pbc(tiny_raw, mapping, label_space, split="train", **kw):
 # --- PBC is keyed off the CSV -----------------------------------------------------------
 
 def test_length_equals_csv_rows(tiny_raw_loadable, mapping, label_space):
+    """The fixture's train split has 4 rows once the unresolvable one is stripped."""
     ds = make_pbc(tiny_raw_loadable, mapping, label_space, split="train")
-    assert len(ds) == 5
+    assert len(ds) == 4
 
 
 def test_unresolvable_csv_row_is_a_hard_error(tiny_raw, mapping, label_space):
@@ -50,8 +51,10 @@ def test_test_split_loads(tiny_raw, mapping, label_space):
 
 def test_item_is_image_class_and_eleven_attributes(tiny_raw, mapping, label_space):
     import torch
+    from torchvision import transforms
 
-    ds = make_pbc(tiny_raw, mapping, label_space, split="test")
+    to_tensor = transforms.Compose([transforms.Resize((16, 16)), transforms.ToTensor()])
+    ds = make_pbc(tiny_raw, mapping, label_space, split="test", transform=to_tensor)
     image, class_idx, attrs = ds[0]
     assert isinstance(image, torch.Tensor) and image.shape == (3, 16, 16)
     assert 0 <= class_idx < 5
@@ -117,6 +120,15 @@ def test_raabin_uses_the_registry_folder_name(tiny_raw, mapping, label_space):
     ds = make_raabin(tiny_raw, mapping, label_space)
     assert ds.split_dir.name == "Test-B"
     assert ds.domain is Domain.TARGET
+
+
+def test_no_transform_yields_a_pil_image(tiny_raw, mapping, label_space):
+    """transform=None is for inspecting labels without paying for decoding; the loaders
+    always supply one."""
+    from PIL.Image import Image as PilImage
+
+    ds = make_pbc(tiny_raw, mapping, label_space, split="test")
+    assert isinstance(ds[0][0], PilImage)
 
 
 def test_raabin_returns_no_attributes(tiny_raw, mapping, label_space):

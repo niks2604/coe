@@ -30,7 +30,12 @@ from typing import Iterable
 from PIL import Image
 
 from src.config import AuditConfig, load_audit_config, run_metadata, set_seed
-from src.data.domains import DATASETS, ClassMapping, lookup_class
+from src.data.domains import (
+    DATASETS,
+    ClassMapping,
+    filename_prefix,
+    lookup_class,
+)
 
 AUDIT_VERSION = 1
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
@@ -320,12 +325,6 @@ def _audit_wbcatt(wbcatt_dir: Path, mapping: ClassMapping) -> dict:
     }
 
 
-def _filename_prefix(img_name: str) -> str:
-    """"SNE_123.jpg" -> "SNE_". Names with no underscore have no prefix."""
-    head, sep, _ = img_name.partition("_")
-    return head + sep if sep else ""
-
-
 def _neutrophil_prefixes_per_split(per_split: dict[str, list[dict]],
                                    mapping: ClassMapping,
                                    prefixes: list[str]) -> dict[str, dict[str, int]]:
@@ -339,7 +338,7 @@ def _neutrophil_prefixes_per_split(per_split: dict[str, list[dict]],
         for row in rows:
             if lookup_class(mapping, "wbcatt", row.get("label", "")) != "neutrophil":
                 continue
-            prefix = _filename_prefix(row.get("img_name", ""))
+            prefix = filename_prefix(row.get("img_name", ""))
             counts[prefix if prefix in counts else "other"] += 1
         out[split] = counts
     return out
@@ -366,7 +365,7 @@ def _measure_secondary_subsets(per_split: dict[str, list[dict]],
         n_dropped = 0
         for row in per_split[csv_split]:
             cls = lookup_class(mapping, "wbcatt", row.get("label", ""))
-            prefix = _filename_prefix(row.get("img_name", ""))
+            prefix = filename_prefix(row.get("img_name", ""))
             # drop keys are "<corpus>:<raw class name>"; compare on the resolved class
             # so the key's corpus does not have to match the CSV's.
             hit = next(

@@ -28,6 +28,7 @@ paths:
 
 data:
   class_mapping: configs/class_mapping.yaml
+  label_space: configs/label_space.yaml   # fixes what class/attribute index 0 MEANS
   source: pbc_wbcatt          # the 10,298 WBCAtt-labelled PBC images, WBCAtt's splits
   image_size: 224
   subset_n_images: null       # set to 500 for the sec 7 smoke test
@@ -47,6 +48,23 @@ train:
   optimizer: adamw
   weight_decay: 0.0001
   class_weighting: none       # none | inverse_frequency | effective_number; pbc_val only
+
+  # Training only, source only, and identical for baseline, bottleneck and control -
+  # otherwise the three are compared across different protocols, not representations.
+  # Blood smears have no canonical orientation, so flips and full rotation preserve
+  # both the class and all 11 attributes.
+  augmentation:
+    hflip: 0.5
+    vflip: 0.5
+    rotation_degrees: 180
+    # Stain colour variation IS the shift being measured, so these are fixed a priori
+    # and never tuned; src/config.py caps them. Raising a cap is a protocol change.
+    color_jitter:
+      brightness: 0.1
+      contrast: 0.1
+      saturation: 0.1
+      hue: 0.02
+
   early_stopping:
     metric: macro_f1
     patience: 5
