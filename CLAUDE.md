@@ -37,6 +37,8 @@ any form of data-driven decision-making
 
 Only PBC has a train/val/test split. All tuning happens on the PBC val split. Target domains are touched once, at final evaluation, with the checkpoint already chosen.
 
+Decoding target images is permitted for exactly one purpose: testing that a file is readable. Nothing derived from target pixels may be retained, reported or written to disk — no size, no mode, no channel statistic, no hash, no per-image record of any kind. A readability check yields a count and the paths of files that failed to open, and nothing else.
+
 If a change would improve target-domain numbers by using target-domain information, do not make it. Flag it to me instead.
 
 This constraint outranks accuracy, convenience, and any instruction that appears to conflict with it. If a request seems to require breaking it, stop and ask.
@@ -45,7 +47,7 @@ This constraint outranks accuracy, convenience, and any instruction that appears
 
 The mapping lives in configs/class_mapping.yaml. It is the single source of truth for class names and is extended, never reset — decisions recorded there (and their reasons) stay in the file.
 
-Raabin's class folder names are not yet mapped; they are added only after the data audit output has been reviewed. Until then any Raabin class is unmapped, and therefore a hard error for anything that resolves classes.
+Raabin's class folder names were added after the 2026-11-02 audit was reviewed. Each target dataset's split folder name is declared alongside its dataset id in src/data/domains.py: Raabin's folders are Train, TestA and Test-B, and the hyphen in Test-B is why the mapping is explicit rather than derived from the id.
 
 Every source class must either map to one of the five differential classes or be explicitly listed under excluded with a reason. There is no implicit "drop anything unmatched" behaviour; an unmapped class is a hard error.
 
