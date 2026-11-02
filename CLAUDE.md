@@ -6,18 +6,19 @@ Project instructions. Read this before doing anything in this repo.
 
 Are hematologist-style morphological attributes (nucleus shape, chromatin density, cytoplasm colour, granularity) a more domain-invariant representation for white blood cell classification than raw CNN features?
 
-We test this by forcing predictions through an 11-attribute bottleneck, training only on one lab's data, and measuring how much accuracy is lost when evaluating zero-shot on data from other labs, cameras, and stain protocols.
+We test this by forcing predictions through an 11-attribute bottleneck, training only on one lab's data, and measuring how much accuracy is lost when evaluating zero-shot on data from other labs and cameras.
 
 The result of this project is a generalization gap, not an accuracy number. A model that scores 99% on the source domain and 70% on target domains is a worse result than one scoring 94% and 89%. Optimize for the gap.
 
 A negative result (the bottleneck does not help) is a valid and publishable outcome. Do not tune the protocol to make the hypothesis true.
 
+Limitation. One target dataset, from a single lab network, so the shift measured is mostly camera and optics rather than stain protocol; the result does not generalize to stain-protocol shift.
+
 2. Datasets and their roles
 Dataset	Role	May be used for
 PBC (Barcelona, Mendeley)	SOURCE domain, restricted to the 10,298 images that carry WBCAtt labels	train / val / source-test
 WBCAtt	11 attribute labels layered on PBC images; its own train/val/test CSVs define the splits	attribute supervision + split definition
-Raabin-WBC	TARGET domain — different labs, 2 camera types	final eval only
-LISC	TARGET domain — different stain protocol	final eval only
+Raabin-WBC	TARGET domain, the only one — different labs, 2 camera types; three separate domains (raabin_train, raabin_testA, raabin_testB)	final eval only
 
 Every model — baseline, bottleneck and control — is trained and evaluated on exactly the same 10,298 WBCAtt-labelled PBC images, using WBCAtt's own pbc_attr_v1_{train,val,test}.csv splits. PBC images without WBCAtt labels are not used by any model.
 
@@ -25,7 +26,7 @@ Label space: the 5-part differential — neutrophil, lymphocyte, monocyte, eosin
 
 3. HARD CONSTRAINT — no target-domain leakage
 
-Raabin-WBC and LISC are evaluation-only. They must never be used for:
+Target data is evaluation-only. Raabin-WBC is the only target in scope: LISC was never obtained and is out of scope. The rule below is written generally because it applies to any target dataset added later, not only to the one in scope now. Target data must never be used for:
 
 training or fine-tuning
 validation or early stopping
