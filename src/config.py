@@ -130,6 +130,10 @@ class ModelCfg:
     type: str
     backbone: str
     backbone_norm: str = "batchnorm"
+    # Local pretrained weights. null means download them. Existence is deliberately not
+    # checked here: a missing file is reported by resolve_imagenet_weights, which names
+    # both ways of supplying them (CLAUDE.md sec 5).
+    imagenet_weights: str | None = None
 
 
 @dataclass(frozen=True)
@@ -285,7 +289,7 @@ EXP_REQUIRED = EXP_TOP - {"bottleneck"}
 
 DATA_KEYS = {"class_mapping", "label_space", "source", "image_size",
              "subset_n_images", "normalization"}
-MODEL_KEYS = {"type", "backbone", "backbone_norm"}
+MODEL_KEYS = {"type", "backbone", "backbone_norm", "imagenet_weights"}
 TRAIN_KEYS = {"epochs", "batch_size", "lr", "optimizer", "weight_decay",
               "class_weighting", "augmentation", "early_stopping"}
 AUGMENTATION_KEYS = {"hflip", "vflip", "rotation_degrees", "color_jitter"}
@@ -380,7 +384,11 @@ def _build_model(doc: dict) -> ModelCfg:
             f"model.backbone_norm: {norm!r} is not one of {list(BACKBONE_NORMS)}")
     if not isinstance(node["backbone"], str) or not node["backbone"]:
         raise ConfigError("model.backbone: expected a non-empty string")
-    return ModelCfg(type=node["type"], backbone=node["backbone"], backbone_norm=norm)
+    weights = node.get("imagenet_weights")
+    if weights is not None and not isinstance(weights, str):
+        raise ConfigError("model.imagenet_weights: expected a path string or null")
+    return ModelCfg(type=node["type"], backbone=node["backbone"], backbone_norm=norm,
+                    imagenet_weights=weights)
 
 
 def _build_bottleneck(doc: dict, model_type: str) -> BottleneckCfg | None:
@@ -652,7 +660,8 @@ def load_config(path: str | Path) -> Config:
         "paths": paths_resolved,
         "data": data_resolved,
         "model": {"type": model.type, "backbone": model.backbone,
-                  "backbone_norm": model.backbone_norm},
+                  "backbone_norm": model.backbone_norm,
+                  "imagenet_weights": model.imagenet_weights},
         "bottleneck": (None if bottleneck is None
                        else {"attribute_loss_weight": bottleneck.attribute_loss_weight}),
         "train": {
