@@ -61,7 +61,8 @@ train:
 
 eval:
   # Three separate Raabin domains; no pooled Raabin headline number.
-  domains: [pbc_test, raabin_train, raabin_testA, raabin_testB, lisc]
+  # LISC was never obtained and is out of scope (CLAUDE.md sec 2).
+  domains: [pbc_test, raabin_train, raabin_testA, raabin_testB]
   attribute_modes: [soft, hard]
 
   secondary_subsets: [pbc_test_no_band_neutrophils]
