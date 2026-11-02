@@ -30,7 +30,7 @@ from typing import Iterable
 from PIL import Image
 
 from src.config import AuditConfig, load_audit_config, run_metadata, set_seed
-from src.data.domains import ClassMapping, lookup_class
+from src.data.domains import DATASETS, ClassMapping, lookup_class
 
 AUDIT_VERSION = 1
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
@@ -41,6 +41,9 @@ ATTR_COLUMNS = [
     "granule_type", "granule_colour", "granularity",
 ]
 WBCATT_SPLITS = ("train", "val", "test")
+# Reporting buckets for the neutrophil filename prefixes PBC uses. Anything else falls
+# into "other", so a prefix we have not seen cannot vanish from the counts.
+NEUTROPHIL_PREFIXES = ["SNE_", "BNE_", "NEUTROPHIL_"]
 MAX_LISTED = 50  # long lists are truncated in the report, with the full count kept
 
 
@@ -51,8 +54,21 @@ def _truncate(items: list[str]) -> list[str]:
 
 
 def _image_files(root: Path) -> list[Path]:
+    """Image files, excluding dotfiles.
+
+    PBC ships data/raw/PBC_dataset_normal_DIB/neutrophil/.DS_169665.jpg - macOS
+    metadata with a .jpg name. It is not an image, so counting it as a corrupt one
+    buries the genuinely corrupt files in the same list. Dotfiles are reported
+    separately by _dotfiles().
+    """
     return sorted(p for p in root.rglob("*")
-                  if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+                  if p.is_file() and not p.name.startswith(".")
+                  and p.suffix.lower() in IMAGE_EXTENSIONS)
+
+
+def _dotfiles(root: Path) -> list[Path]:
+    return sorted(p for p in root.rglob("*")
+                  if p.is_file() and p.name.startswith("."))
 
 
 def _verify(paths: Iterable[Path], root: Path, record_stats: bool) -> dict:
@@ -107,7 +123,8 @@ def _scan_class_folders(root: Path, mapping: ClassMapping, corpus: str,
     """A split directory whose immediate children are class folders."""
     class_dirs = sorted(p for p in root.iterdir() if p.is_dir())
     loose = [p for p in root.iterdir()
-             if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
+             if p.is_file() and not p.name.startswith(".")
+             and p.suffix.lower() in IMAGE_EXTENSIONS]
 
     classes: dict[str, dict] = {}
     all_images: list[Path] = []
@@ -122,6 +139,7 @@ def _scan_class_folders(root: Path, mapping: ClassMapping, corpus: str,
         "n_class_folders": len(class_dirs),
         "classes": classes,
         "images_outside_class_folders": len(loose),
+        "n_ignored_dotfiles": len(_dotfiles(root)),
         "extensions": dict(Counter(p.suffix.lower() for p in all_images).most_common()),
     }
     verified = _verify(all_images + loose, root, record_stats)
@@ -169,7 +187,11 @@ def _audit_pbc(root: Path, mapping: ClassMapping, verify: bool, max_depth: int) 
         "extensions": dict(Counter(p.suffix.lower() for p in images).most_common()),
         "non_image_files": _truncate(
             [str(p.relative_to(root)) for p in sorted(root.rglob("*"))
-             if p.is_file() and p.suffix.lower() not in IMAGE_EXTENSIONS]),
+             if p.is_file() and not p.name.startswith(".")
+             and p.suffix.lower() not in IMAGE_EXTENSIONS]),
+        "ignored_dotfiles": _truncate(
+            [str(p.relative_to(root)) for p in _dotfiles(root)]),
+        "n_ignored_dotfiles": len(_dotfiles(root)),
         "duplicate_filenames": _duplicate_filenames(images, root),
         "tree": _tree(root, max_depth),
     }
@@ -287,12 +309,88 @@ def _audit_wbcatt(wbcatt_dir: Path, mapping: ClassMapping) -> dict:
         "unmapped_labels": unmapped_labels,
         "attributes": attributes,
         "n_attribute_values_total": sum(a["n_values"] for a in attributes.values()),
+        "neutrophil_prefixes_per_split": _neutrophil_prefixes_per_split(
+            per_split, mapping, NEUTROPHIL_PREFIXES),
+        "secondary_subsets": _measure_secondary_subsets(per_split, mapping),
         "split_overlaps": overlaps,
         "duplicate_img_names_within_split": {
             s: {n: c for n, c in Counter(r.get("img_name", "") for r in rows).items() if c > 1}
             for s, rows in sorted(per_split.items())
         },
     }
+
+
+def _filename_prefix(img_name: str) -> str:
+    """"SNE_123.jpg" -> "SNE_". Names with no underscore have no prefix."""
+    head, sep, _ = img_name.partition("_")
+    return head + sep if sep else ""
+
+
+def _neutrophil_prefixes_per_split(per_split: dict[str, list[dict]],
+                                   mapping: ClassMapping,
+                                   prefixes: list[str]) -> dict[str, dict[str, int]]:
+    """Band vs segmented is visible only in the filename, and the 2026-09-15 decision
+    to keep bands rests on how they fall across the WBCAtt splits. Source data only.
+    """
+    out: dict[str, dict[str, int]] = {}
+    for split, rows in sorted(per_split.items()):
+        counts = {p: 0 for p in prefixes}
+        counts["other"] = 0
+        for row in rows:
+            if lookup_class(mapping, "wbcatt", row.get("label", "")) != "neutrophil":
+                continue
+            prefix = _filename_prefix(row.get("img_name", ""))
+            counts[prefix if prefix in counts else "other"] += 1
+        out[split] = counts
+    return out
+
+
+def _measure_secondary_subsets(per_split: dict[str, list[dict]],
+                               mapping: ClassMapping) -> dict[str, dict]:
+    """Measure each secondary subset defined in the mapping, rather than restating the
+    size recorded there. Drop prefixes come from the mapping, never from this module.
+    """
+    out: dict[str, dict] = {}
+    for name, spec in mapping.secondary_subsets.items():
+        split_id = spec.get("split", "")
+        csv_split = DATASETS[split_id].csv_split if split_id in DATASETS else None
+        if csv_split is None or csv_split not in per_split:
+            out[name] = {"status": "skipped", "split": split_id,
+                         "reason": f"no rows for split {split_id!r}"}
+            continue
+
+        drop = {key: list(vals) for key, vals
+                in (spec.get("drop_filename_prefixes") or {}).items()}
+        kept: Counter = Counter()
+        dropped_prefixes: Counter = Counter()
+        n_dropped = 0
+        for row in per_split[csv_split]:
+            cls = lookup_class(mapping, "wbcatt", row.get("label", ""))
+            prefix = _filename_prefix(row.get("img_name", ""))
+            # drop keys are "<corpus>:<raw class name>"; compare on the resolved class
+            # so the key's corpus does not have to match the CSV's.
+            hit = next(
+                (p for key, prefs in drop.items()
+                 if lookup_class(mapping, *key.split(":", 1)) == cls
+                 for p in prefs if prefix == p),
+                None,
+            )
+            if hit is not None:
+                dropped_prefixes[hit] += 1
+                n_dropped += 1
+            else:
+                kept[cls or "UNMAPPED"] += 1
+
+        out[name] = {
+            "status": "measured",
+            "split": split_id,
+            "n_images_in_split": len(per_split[csv_split]),
+            "n_images": sum(kept.values()),
+            "n_dropped": n_dropped,
+            "dropped_prefixes": dict(sorted(dropped_prefixes.items())),
+            "counts_per_class": dict(sorted(kept.items())),
+        }
+    return out
 
 
 def _candidate_paths(row: dict, pbc_images: Path) -> list[tuple[str, Path]]:
@@ -414,6 +512,7 @@ def _audit_lisc(root: Path, mapping: ClassMapping) -> dict:
             "classes": classes,
             "n_class_folders": 0,
             "images_outside_class_folders": len(imgs),
+            "n_ignored_dotfiles": len(_dotfiles(d)),
             "extensions": dict(Counter(p.suffix.lower() for p in imgs).most_common()),
             "unreadable": _verify(imgs, d, record_stats=False)["unreadable"],
         }
@@ -471,7 +570,10 @@ def format_report(rep: dict) -> str:
     else:
         a(f"  {pbc['path']}")
         a(f"  {pbc['n_images']} images, {len(pbc['classes'])} class folders, "
-          f"{pbc['n_unreadable']} unreadable")
+          f"{pbc['n_unreadable']} unreadable, "
+          f"ignored: {pbc['n_ignored_dotfiles']} dotfile(s)")
+        for f in pbc["ignored_dotfiles"]:
+            a(f"    ignored: {f}")
         for cls, e in pbc["classes"].items():
             tag = e["mapped_to"] or ("EXCLUDED" if cls in pbc["excluded_classes"]
                                      else "UNMAPPED")
@@ -507,6 +609,17 @@ def format_report(rep: dict) -> str:
             a(f"  UNMAPPED labels: {w['unmapped_labels']}")
         if w["split_overlaps"]:
             a(f"  SPLIT OVERLAP: {w['split_overlaps']}")
+        a("  neutrophil filename prefixes per split:")
+        for split, counts in w["neutrophil_prefixes_per_split"].items():
+            a(f"    {split:<6} " + "  ".join(f"{k}={v}" for k, v in counts.items()))
+        for name, sub in w["secondary_subsets"].items():
+            if sub["status"] != "measured":
+                a(f"  {name}: skipped ({sub['reason']})")
+                continue
+            a(f"  {name} ({sub['split']}): {sub['n_images']} of "
+              f"{sub['n_images_in_split']} images, {sub['n_dropped']} dropped "
+              f"{sub['dropped_prefixes']}")
+            a(f"    per class: {sub['counts_per_class']}")
         a(f"  attribute values total: {w['n_attribute_values_total']} across 11 columns")
         for col, e in w["attributes"].items():
             a(f"    {col:<28} {e['n_values']:>3} values, {e['n_null']} null")
@@ -545,7 +658,8 @@ def format_report(rep: dict) -> str:
         a(f"  {t['path']}   {t['n_images_total']} images")
         for split, s in t["splits"].items():
             a(f"    {split:<8} {s['n_images']:>6} images, "
-              f"{len(s['classes'])} classes, {len(s['unreadable'])} unreadable")
+              f"{len(s['classes'])} classes, {len(s['unreadable'])} unreadable, "
+              f"ignored: {s['n_ignored_dotfiles']} dotfile(s)")
             for cls, e in s["classes"].items():
                 a(f"      {cls:<16} {e['n_images']:>6}  -> {e['mapped_to'] or 'UNMAPPED'}")
             for u in s["unreadable"]:

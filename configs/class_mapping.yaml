@@ -5,10 +5,10 @@
 #   pbc     top-level folder name in data/raw/PBC_dataset_normal_DIB/
 #   wbcatt  `label` column of data/raw/pbc_attr_v1_{train,val,test}.csv
 #   lisc    filename prefix before the first "_" in data/raw/LISC/{Train,Test}/
-#   raabin  class folder name under data/raw/raabin_double_labeled/{Train,TestA,TestB}/
-#           TODO - added only after the audit report has been reviewed. Until then every
-#           Raabin class is unmapped, which is a hard error in resolve_class() and is
-#           reported (not raised) by the audit.
+#   raabin  class folder name under data/raw/raabin_double_labeled/{Train,TestA,Test-B}/
+#           Added 2026-11-02 after the audit report was reviewed. The split folder name
+#           for each dataset id is declared in src/data/domains.py (note Test-B, which
+#           is hyphenated unlike Train and TestA).
 #
 # Matching is exact and case-sensitive. A class name found in the data that is not
 # listed exactly once, under one of the five classes or under `excluded`, is a hard error.
@@ -32,29 +32,37 @@ neutrophil:
   - pbc:neutrophil
   - wbcatt:Neutrophil
   - lisc:neut
+  - raabin:Neutrophil
 
 lymphocyte:
   - pbc:lymphocyte
   - wbcatt:Lymphocyte
   - lisc:lymp
+  - raabin:Lymphocyte
 
 monocyte:
   - pbc:monocyte
   - wbcatt:Monocyte
   - lisc:mono
+  - raabin:Monocyte
 
 eosinophil:
   - pbc:eosinophil
   - wbcatt:Eosinophil
   - lisc:eosi
+  - raabin:Eosinophil
 
 basophil:
   - pbc:basophil
   - wbcatt:Basophil
   - lisc:Baso
+  - raabin:Basophil
 
 excluded:
   # class_name: reason
+  # Raabin contributes nothing here: the 2026-11-02 audit found exactly five class
+  # folders per split (Train and TestA; Test-B has Neutrophil and Lymphocyte only),
+  # all five mapping 1:1 onto the differential.
   pbc:ig: immature granulocytes (promyelocytes PMY_, myelocytes MY_, metamyelocytes MMY_, IG_); not part of the 5-part differential
   pbc:erythroblast: nucleated red cell precursor, not a white blood cell
   pbc:platelet: not a white blood cell

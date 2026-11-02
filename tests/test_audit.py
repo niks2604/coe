@@ -310,11 +310,15 @@ def test_secondary_subset_prefixes_come_from_the_mapping(report):
 
 
 def test_prefix_counts_are_source_only(report):
-    """No filename-derived breakdown for any target dataset."""
+    """No filename-derived breakdown for any target dataset.
+
+    Checked on keys, not on a serialised blob: tmp_path embeds the test's own name, so
+    a substring search over the JSON matches the directory path instead of the data.
+    """
     rep, _ = report
-    blob = json.dumps(rep["targets"])
-    assert "prefix" not in blob.lower()
-    assert "secondary_subsets" not in blob
+    keys = {k.lower() for k in all_keys(rep["targets"])}
+    assert not [k for k in keys if "prefix" in k]
+    assert "secondary_subsets" not in keys
 
 
 # --- (b) dotfiles are ignored, not unreadable -----------------------------------------

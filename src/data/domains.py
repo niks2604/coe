@@ -34,28 +34,44 @@ class UnmappedClass(Exception):
     """Raised for a class name that is neither mapped nor explicitly excluded."""
 
 
+class DatasetLayoutError(Exception):
+    """Raised when the folders on disk do not match the registered datasets."""
+
+
 @dataclass(frozen=True)
 class DatasetSpec:
+    """A dataset id and where its data actually lives.
+
+    `folder` is the split's directory name on disk, declared rather than derived: the
+    Raabin archive unpacks raabin_testB to "Test-B", so lowercasing or stripping the id
+    would point at a directory that does not exist and yield an empty split.
+    `csv_split` is the equivalent for source datasets, whose rows come from
+    pbc_attr_v1_<csv_split>.csv rather than from a folder listing.
+    """
+
     dataset_id: str
     domain: Domain
     corpus: str  # which mapping namespace its raw class names live in
+    folder: str | None = None       # target datasets: directory name under the root
+    csv_split: str | None = None    # source datasets: WBCAtt CSV suffix
     note: str = ""
 
 
 DATASETS: dict[str, DatasetSpec] = {
-    "pbc_train": DatasetSpec("pbc_train", Domain.SOURCE, "wbcatt"),
-    "pbc_val": DatasetSpec("pbc_val", Domain.SOURCE, "wbcatt"),
-    "pbc_test": DatasetSpec("pbc_test", Domain.SOURCE, "wbcatt"),
+    "pbc_train": DatasetSpec("pbc_train", Domain.SOURCE, "wbcatt", csv_split="train"),
+    "pbc_val": DatasetSpec("pbc_val", Domain.SOURCE, "wbcatt", csv_split="val"),
+    "pbc_test": DatasetSpec("pbc_test", Domain.SOURCE, "wbcatt", csv_split="test"),
     "raabin_train": DatasetSpec(
-        "raabin_train", Domain.TARGET, "raabin",
+        "raabin_train", Domain.TARGET, "raabin", folder="Train",
         note="Raabin's own split is named Train. It is TARGET data and is never trained on.",
     ),
-    "raabin_testA": DatasetSpec("raabin_testA", Domain.TARGET, "raabin"),
+    "raabin_testA": DatasetSpec("raabin_testA", Domain.TARGET, "raabin", folder="TestA"),
     "raabin_testB": DatasetSpec(
-        "raabin_testB", Domain.TARGET, "raabin",
-        note="Different camera/microscope; holds only neutrophil and lymphocyte.",
+        "raabin_testB", Domain.TARGET, "raabin", folder="Test-B",
+        note="Different camera/microscope; holds only neutrophil and lymphocyte. The "
+             "folder is hyphenated, unlike Train and TestA.",
     ),
-    "lisc": DatasetSpec("lisc", Domain.TARGET, "lisc"),
+    "lisc": DatasetSpec("lisc", Domain.TARGET, "lisc", folder="."),
 }
 
 SOURCE_IDS = tuple(k for k, v in DATASETS.items() if v.domain is Domain.SOURCE)
@@ -91,6 +107,75 @@ def assert_source_only(obj) -> None:
             f"model selection or tuning (CLAUDE.md sec 3). Target domains are touched "
             f"once, at final evaluation, with the checkpoint already chosen."
         )
+
+
+def target_folder(dataset_id: str) -> str:
+    """Directory name on disk for a target dataset."""
+    spec = DATASETS[dataset_id] if dataset_id in DATASETS else None
+    if spec is None:
+        raise KeyError(f"unknown dataset id {dataset_id!r}")
+    if spec.domain is not Domain.TARGET or spec.folder is None:
+        raise ValueError(
+            f"{dataset_id!r} is not a folder-backed target dataset; source datasets are "
+            f"keyed off their WBCAtt CSV (csv_split), not a folder listing."
+        )
+    return spec.folder
+
+
+def resolve_target_folders(root: Path, corpus: str) -> dict[str, Path]:
+    """Map each registered target dataset of `corpus` to its directory under `root`.
+
+    Both directions are checked, because both failure modes are silent:
+    a registered split whose folder is missing or empty would evaluate on nothing, and
+    a folder nobody registered would simply never be evaluated. Either is a hard error.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        raise DatasetLayoutError(f"not a directory: {root}")
+
+    registered = {spec.folder: spec.dataset_id for spec in DATASETS.values()
+                  if spec.domain is Domain.TARGET and spec.corpus == corpus
+                  and spec.folder not in (None, ".")}
+
+    # Every problem is collected before raising: reporting only the first one makes
+    # fixing a layout a game of whack-a-mole, and which comes first is an accident of
+    # sort order ("Test-B" sorts before "TestA").
+    found: dict[str, Path] = {}
+    missing: list[str] = []
+    empty: list[str] = []
+    for folder, dataset_id in sorted(registered.items()):
+        path = root / folder
+        if not path.is_dir():
+            missing.append(f"{dataset_id} -> {folder}/")
+        elif not any(p.is_file() for p in path.rglob("*")):
+            empty.append(f"{dataset_id} -> {folder}/")
+        else:
+            found[dataset_id] = path
+
+    present = sorted(p.name for p in root.iterdir() if p.is_dir())
+    unregistered = [name for name in present if name not in registered]
+
+    problems: list[str] = []
+    if missing:
+        problems.append(f"registered but no such folder: {missing}")
+    if empty:
+        problems.append(
+            f"registered but the folder holds no files: {empty} - an empty split would "
+            f"evaluate on nothing and report a meaningless number"
+        )
+    if unregistered:
+        problems.append(
+            f"folder(s) matching no registered dataset id: {unregistered} - register "
+            f"them in src/data/domains.py with an explicit domain, or they will never "
+            f"be evaluated"
+        )
+    if problems:
+        raise DatasetLayoutError(
+            f"{root} does not match the registered {corpus} datasets. "
+            + "; ".join(problems)
+            + f". Folders present: {present}. Registered: {sorted(registered)}"
+        )
+    return found
 
 
 def assert_tuning_split(dataset_id: str) -> None:
