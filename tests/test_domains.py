@@ -107,17 +107,10 @@ def test_unmapped_class_is_a_hard_error(class_mapping_path):
         resolve_class(mapping, "pbc", "smudge_cell")
 
 
-def test_raabin_classes_are_still_unmapped(class_mapping_path):
-    """Raabin is mapped only after the audit is reviewed (CLAUDE.md sec 4)."""
-    mapping = load_class_mapping(class_mapping_path)
-    with pytest.raises(UnmappedClass):
-        resolve_class(mapping, "raabin", "Neutrophil")
-
-
 def test_lookup_class_reports_instead_of_raising(class_mapping_path):
     """The audit must be able to report unmapped names without crashing."""
     mapping = load_class_mapping(class_mapping_path)
-    assert lookup_class(mapping, "raabin", "Neutrophil") is None
+    assert lookup_class(mapping, "pbc", "smudge_cell") is None
     assert lookup_class(mapping, "pbc", "basophil") == "basophil"
 
 
@@ -126,3 +119,104 @@ def test_secondary_subsets_are_source_only(class_mapping_path):
     assert "pbc_test_no_band_neutrophils" in mapping.secondary_subsets
     for name, spec in mapping.secondary_subsets.items():
         assert domain_of(spec["split"]) is Domain.SOURCE, name
+
+
+# --- (c) dataset id -> folder name ----------------------------------------------------
+
+def test_target_folder_names_are_declared_explicitly():
+    """Raabin's archive unpacks to Test-B, hyphenated, while the dataset id is
+    raabin_testB. Deriving one from the other silently yields an empty split."""
+    from src.data.domains import target_folder
+
+    assert target_folder("raabin_train") == "Train"
+    assert target_folder("raabin_testA") == "TestA"
+    assert target_folder("raabin_testB") == "Test-B"
+
+
+def test_source_datasets_declare_a_csv_split_not_a_folder():
+    from src.data.domains import DATASETS
+
+    assert DATASETS["pbc_test"].csv_split == "test"
+    assert DATASETS["pbc_test"].folder is None
+
+
+def test_target_folder_refuses_a_source_dataset():
+    from src.data.domains import target_folder
+
+    with pytest.raises(ValueError):
+        target_folder("pbc_train")
+
+
+def test_resolve_target_folders_maps_ids_to_paths(tiny_raw):
+    from src.data.domains import resolve_target_folders
+
+    found = resolve_target_folders(tiny_raw / "raabin_double_labeled", "raabin")
+    assert set(found) == {"raabin_train", "raabin_testA", "raabin_testB"}
+    assert found["raabin_testB"].name == "Test-B"
+
+
+def test_registered_target_resolving_to_zero_files_raises(tmp_path):
+    """An empty or renamed split must fail loudly, not evaluate on nothing."""
+    from src.data.domains import DatasetLayoutError, resolve_target_folders
+
+    root = tmp_path / "raabin_double_labeled"
+    for name in ("Train", "TestA", "Test-B"):
+        (root / name).mkdir(parents=True)
+    (root / "Train" / "Neutrophil").mkdir()
+    (root / "Train" / "Neutrophil" / "a.jpg").write_bytes(b"x")
+    with pytest.raises(DatasetLayoutError, match="Test-B"):
+        resolve_target_folders(root, "raabin")
+
+
+def test_missing_registered_folder_raises(tmp_path):
+    from src.data.domains import DatasetLayoutError, resolve_target_folders
+
+    root = tmp_path / "raabin_double_labeled"
+    (root / "Train" / "Neutrophil").mkdir(parents=True)
+    (root / "Train" / "Neutrophil" / "a.jpg").write_bytes(b"x")
+    with pytest.raises(DatasetLayoutError, match="TestA"):
+        resolve_target_folders(root, "raabin")
+
+
+def test_unregistered_folder_raises(tiny_raw):
+    """A folder nobody registered would otherwise be silently skipped."""
+    from src.data.domains import DatasetLayoutError, resolve_target_folders
+
+    root = tiny_raw / "raabin_double_labeled"
+    (root / "TestC").mkdir()
+    (root / "TestC" / "Neutrophil").mkdir()
+    (root / "TestC" / "Neutrophil" / "a.jpg").write_bytes(b"x")
+    with pytest.raises(DatasetLayoutError, match="TestC"):
+        resolve_target_folders(root, "raabin")
+
+
+# --- (d) Raabin class names ------------------------------------------------------------
+
+@pytest.mark.parametrize("folder,expected", [
+    ("Neutrophil", "neutrophil"),
+    ("Lymphocyte", "lymphocyte"),
+    ("Monocyte", "monocyte"),
+    ("Eosinophil", "eosinophil"),
+    ("Basophil", "basophil"),
+])
+def test_raabin_folder_names_resolve(class_mapping_path, folder, expected):
+    mapping = load_class_mapping(class_mapping_path)
+    assert resolve_class(mapping, "raabin", folder) == expected
+
+
+def test_raabin_has_no_exclusions(class_mapping_path):
+    mapping = load_class_mapping(class_mapping_path)
+    assert [k for k in mapping.excluded if k.startswith("raabin:")] == []
+
+
+def test_unknown_raabin_folder_is_a_hard_error(class_mapping_path):
+    mapping = load_class_mapping(class_mapping_path)
+    with pytest.raises(UnmappedClass):
+        resolve_class(mapping, "raabin", "Myelocyte")
+
+
+def test_raabin_lowercase_is_a_hard_error(class_mapping_path):
+    """Matching stays exact and case-sensitive; the folders are capitalised."""
+    mapping = load_class_mapping(class_mapping_path)
+    with pytest.raises(UnmappedClass):
+        resolve_class(mapping, "raabin", "neutrophil")

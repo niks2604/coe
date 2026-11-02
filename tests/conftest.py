@@ -113,12 +113,13 @@ def tiny_raw(tmp_path) -> Path:
     for split, classes in (
         ("Train", ["Neutrophil", "Lymphocyte", "Monocyte", "Eosinophil", "Basophil"]),
         ("TestA", ["Neutrophil", "Lymphocyte", "Monocyte", "Eosinophil", "Basophil"]),
-        ("TestB", ["Neutrophil", "Lymphocyte"]),
+        # The real archive unpacks to Test-B, hyphenated, unlike Train and TestA.
+        ("Test-B", ["Neutrophil", "Lymphocyte"]),
     ):
         for cls in classes:
             for i in range(2):
                 write_image(raabin / split / cls / f"{cls}_{i}.jpg", size=(12, 10))
-    write_corrupt(raabin / "TestB" / "Neutrophil" / "RB_CORRUPT.jpg")
+    write_corrupt(raabin / "Test-B" / "Neutrophil" / "RB_CORRUPT.jpg")
 
     # data/raw/LISC deliberately absent.
     return raw

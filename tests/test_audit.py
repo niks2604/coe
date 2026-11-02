@@ -60,7 +60,8 @@ def test_targets_get_no_size_or_mode_distributions(report):
     assert "image_modes" not in json.dumps(raabin)
     for split in raabin["splits"].values():
         assert set(split) <= {"n_images", "classes", "unreadable", "extensions",
-                              "n_class_folders", "images_outside_class_folders"}
+                              "n_class_folders", "images_outside_class_folders",
+                              "n_ignored_dotfiles"}
 
 
 def test_source_does_get_size_and_mode_distributions(report):
@@ -91,15 +92,13 @@ def test_present_dataset_is_reported_present(report):
 
 def test_corrupt_images_are_listed_not_crashed(report):
     rep, _ = report
-    unreadable = " ".join(rep["source"]["pbc"]["unreadable"])
-    assert "BA_CORRUPT.jpg" in unreadable
-    assert ".DS_169665.jpg" in unreadable
+    assert "BA_CORRUPT.jpg" in " ".join(rep["source"]["pbc"]["unreadable"])
 
 
 def test_corrupt_target_image_is_listed(report):
     rep, _ = report
     assert any("RB_CORRUPT.jpg" in u
-               for u in rep["targets"]["raabin"]["splits"]["TestB"]["unreadable"])
+               for u in rep["targets"]["raabin"]["splits"]["Test-B"]["unreadable"])
 
 
 def test_duplicate_filenames_within_a_dataset_are_reported(report):
@@ -119,7 +118,15 @@ def test_class_folders_are_listed_with_counts(report):
 def test_unmapped_and_excluded_classes_are_reported_not_fatal(report):
     rep, _ = report
     assert rep["source"]["pbc"]["excluded_classes"] == ["platelet"]
-    assert rep["targets"]["raabin"]["unmapped_classes"]
+
+
+def test_raabin_classes_are_now_all_mapped(report):
+    """They were added to the mapping after the 2026-11-02 audit was reviewed."""
+    rep, _ = report
+    assert rep["targets"]["raabin"]["unmapped_classes"] == []
+    for split in rep["targets"]["raabin"]["splits"].values():
+        for cls, entry in split["classes"].items():
+            assert entry["mapped_to"] is not None, cls
 
 
 # --- PBC <-> WBCAtt join -------------------------------------------------------------
@@ -190,12 +197,12 @@ def test_nulls_per_attribute_are_reported(report):
 
 def test_raabin_splits_are_reported_separately(report):
     rep, _ = report
-    assert set(rep["targets"]["raabin"]["splits"]) == {"Train", "TestA", "TestB"}
+    assert set(rep["targets"]["raabin"]["splits"]) == {"Train", "TestA", "Test-B"}
 
 
 def test_raabin_testb_class_folders_are_listed(report):
     rep, _ = report
-    assert set(rep["targets"]["raabin"]["splits"]["TestB"]["classes"]) == {
+    assert set(rep["targets"]["raabin"]["splits"]["Test-B"]["classes"]) == {
         "Neutrophil", "Lymphocyte",
     }
 
@@ -261,3 +268,86 @@ def test_join_reports_both_copies_of_a_duplicated_filename(report):
     rep, _ = report
     on_disk_only = rep["source"]["join"]["on_disk_only"]
     assert sum("DUPE_1.jpg" in p for p in on_disk_only) == 2
+
+
+# --- (a) per-split neutrophil prefix counts, source only ------------------------------
+
+def test_neutrophil_prefix_counts_per_wbcatt_split(report):
+    """Band vs segmented is only visible in the filename, and the band decision in
+    configs/class_mapping.yaml rests on these counts per split."""
+    rep, _ = report
+    per_split = rep["source"]["wbcatt"]["neutrophil_prefixes_per_split"]
+    assert set(per_split) == {"train", "val", "test"}
+    assert per_split["test"] == {"SNE_": 1, "BNE_": 1, "NEUTROPHIL_": 1, "other": 0}
+
+
+def test_prefix_counts_cover_every_neutrophil_row(report):
+    rep, _ = report
+    w = rep["source"]["wbcatt"]
+    counted = sum(sum(v.values()) for v in w["neutrophil_prefixes_per_split"].values())
+    assert counted == w["counts_per_class"]["neutrophil"]
+
+
+def test_secondary_subset_size_is_measured(report):
+    """The mapping claims 2,606 of 3,099 for the real data; the audit measures it
+    rather than restating it."""
+    rep, _ = report
+    sub = rep["source"]["wbcatt"]["secondary_subsets"]["pbc_test_no_band_neutrophils"]
+    assert sub["split"] == "pbc_test"
+    assert sub["n_images"] == 3          # 5 test rows, BNE_ and NEUTROPHIL_ dropped
+    assert sub["n_dropped"] == 2
+    assert sub["dropped_prefixes"] == {"BNE_": 1, "NEUTROPHIL_": 1}
+    assert sub["counts_per_class"]["neutrophil"] == 1
+
+
+def test_secondary_subset_prefixes_come_from_the_mapping(report):
+    """Not hardcoded in the audit: the drop list lives in class_mapping.yaml."""
+    rep, _ = report
+    spec = rep["config"]["audit"]["class_mapping"]["secondary_subsets"]
+    expected = spec["pbc_test_no_band_neutrophils"]["drop_filename_prefixes"]["pbc:neutrophil"]
+    sub = rep["source"]["wbcatt"]["secondary_subsets"]["pbc_test_no_band_neutrophils"]
+    assert sorted(sub["dropped_prefixes"]) == sorted(expected)
+
+
+def test_prefix_counts_are_source_only(report):
+    """No filename-derived breakdown for any target dataset."""
+    rep, _ = report
+    blob = json.dumps(rep["targets"])
+    assert "prefix" not in blob.lower()
+    assert "secondary_subsets" not in blob
+
+
+# --- (b) dotfiles are ignored, not unreadable -----------------------------------------
+
+def test_dotfiles_are_ignored_not_reported_unreadable(report):
+    """.DS_169665.jpg is macOS metadata with a .jpg name. Counting it as a corrupt
+    image buries the one genuinely corrupt file in the same list."""
+    rep, _ = report
+    pbc = rep["source"]["pbc"]
+    assert ".DS_169665.jpg" not in " ".join(pbc["unreadable"])
+    assert any(".DS_169665.jpg" in f for f in pbc["ignored_dotfiles"])
+    assert pbc["n_ignored_dotfiles"] == 1
+
+
+def test_dotfiles_are_excluded_from_image_counts(report):
+    rep, _ = report
+    pbc = rep["source"]["pbc"]
+    assert pbc["n_images"] == 15          # 16 files, one of them a dotfile
+    assert pbc["classes"]["neutrophil"]["n_images"] == 3
+
+
+def test_dotfiles_are_excluded_from_the_join(report):
+    rep, _ = report
+    assert ".DS_169665.jpg" not in " ".join(rep["source"]["join"]["on_disk_only"])
+
+
+def test_dotfile_prefix_is_not_reported_as_a_class_prefix(report):
+    """The .DS_ prefix used to appear in the neutrophil prefix histogram."""
+    rep, _ = report
+    assert ".DS_" not in rep["source"]["pbc"]["classes"]["neutrophil"]["filename_prefixes"]
+
+
+def test_targets_report_dotfile_counts_only(report):
+    rep, _ = report
+    for split in rep["targets"]["raabin"]["splits"].values():
+        assert isinstance(split["n_ignored_dotfiles"], int)
