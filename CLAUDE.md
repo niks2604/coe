@@ -14,10 +14,12 @@ A negative result (the bottleneck does not help) is a valid and publishable outc
 
 2. Datasets and their roles
 Dataset	Role	May be used for
-PBC (Barcelona, Mendeley)	SOURCE domain, ~17k images	train / val / source-test
-WBCAtt	11 attribute labels layered on PBC images	attribute supervision
+PBC (Barcelona, Mendeley)	SOURCE domain, restricted to the 10,298 images that carry WBCAtt labels	train / val / source-test
+WBCAtt	11 attribute labels layered on PBC images; its own train/val/test CSVs define the splits	attribute supervision + split definition
 Raabin-WBC	TARGET domain — different labs, 2 camera types	final eval only
 LISC	TARGET domain — different stain protocol	final eval only
+
+Every model — baseline, bottleneck and control — is trained and evaluated on exactly the same 10,298 WBCAtt-labelled PBC images, using WBCAtt's own pbc_attr_v1_{train,val,test}.csv splits. PBC images without WBCAtt labels are not used by any model.
 
 Label space: the 5-part differential — neutrophil, lymphocyte, monocyte, eosinophil, basophil.
 
@@ -41,7 +43,9 @@ This constraint outranks accuracy, convenience, and any instruction that appears
 
 4. Class name mapping
 
-TODO — fill in after the data audit (session 1-2).
+The mapping lives in configs/class_mapping.yaml. It is the single source of truth for class names and is extended, never reset — decisions recorded there (and their reasons) stay in the file.
+
+Raabin's class folder names are not yet mapped; they are added only after the data audit output has been reviewed. Until then any Raabin class is unmapped, and therefore a hard error for anything that resolves classes.
 
 Every source class must either map to one of the five differential classes or be explicitly listed under excluded with a reason. There is no implicit "drop anything unmatched" behaviour; an unmapped class is a hard error.
 
@@ -72,7 +76,9 @@ wall-clock time and hardware
 
 Reproducibility bar. A training script is done when python -m src.train --config configs/<x>.yaml reproduces the run from scratch with no other arguments, no manual steps, and no edits to source files.
 
-Paths. Data lives under data/, which is gitignored. Never commit images. Never write outside the repo.
+Paths. Raw data lives under data/raw/, which is gitignored — the layout scripts/extract_raw.py produces. Never commit images.
+
+Writes outside the repo are allowed in exactly one case: when env: kaggle, results are written to /kaggle/working. Every other env writes inside the repo only.
 
 6. Metrics
 
