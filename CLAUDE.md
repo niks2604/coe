@@ -88,6 +88,18 @@ Always report basophil and eosinophil recall separately — they are rare and ar
 
 Also: expected calibration error (ECE), and accuracy-vs-coverage curve under abstention.
 
+Fixed protocol. The following are settled in advance, before any target-domain number has been seen, and are enforced in src/config.py rather than left to whoever runs the experiment:
+
+Macro-F1 is computed only over the classes present in that eval set, and the class list used is recorded alongside the number. Raabin TestB contains only neutrophil and lymphocyte, so it reports a 2-class macro-F1 plus per-class recall — never a 5-class figure, which would not be comparable to anything else.
+
+Raabin is three separate TARGET domains: raabin_train, raabin_testA, raabin_testB. There is no pooled Raabin headline number — TestB is a different camera, and pooling would hide the effect being measured. The split named Train is target data and is never trained on.
+
+Bootstrap: n=2000, 95% CI, stratified by class. Source and target are resampled independently for the source→target gap, since they are disjoint sets of images. The headline number is still the mean ± std over 3 seeds; the bootstrap CI is reported per seed per domain alongside it.
+
+Raabin's basophils come from a single leukemia patient. Any basophil recall on a Raabin domain carries that caveat and must be reported with it — it is one patient's cells, not a sample of basophils.
+
+Changing any of the above after a target number has been seen is a protocol change, not a tweak. Flag it to me and log it in section 8.
+
 7. Working style
 For anything structural, plan first, code after approval. Say what you intend to change and where, then wait.
 Prefer small diffs against a working system over rewrites.
