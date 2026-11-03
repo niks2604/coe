@@ -1,0 +1,32 @@
+# Read-only data audit, on Kaggle.
+# Run: python -m src.data.audit --config configs/audit_kaggle.yaml
+#
+# Identical to audit.yaml except env, which is kaggle here. A separate file rather than a
+# CLI flag: no flag may change behaviour in a way the config does not record
+# (CLAUDE.md sec 5), and "which tree did the audit actually read" is exactly the kind of
+# thing a report has to be able to answer later.
+#
+# This config holds paths and nothing else: the audit makes no decisions, so it has no
+# hyperparameters.
+
+env: kaggle
+seed: 0
+
+paths:
+  local:
+    pbc_images: data/raw/PBC_dataset_normal_DIB
+    wbcatt_dir: data/raw                       # pbc_attr_v1_{train,val,test}.csv
+    raabin_root: data/raw/raabin_double_labeled
+    lisc_root: data/raw/LISC                   # may be absent; reported, not fatal
+    results_dir: results
+  kaggle:
+    pbc_images: /kaggle/input/datasets/anikakrishnaa/pbc-images/PBC_dataset_normal_DIB
+    wbcatt_dir: /kaggle/input/datasets/anikakrishnaa/wbcatt
+    raabin_root: /kaggle/input/datasets/anikakrishnaa/raabin-double-labeled
+    lisc_root: /kaggle/input/datasets/anikakrishnaa/lisc   # out of scope; expected absent
+    results_dir: /kaggle/working/results       # the one permitted write outside the repo
+
+audit:
+  class_mapping: configs/class_mapping.yaml
+  verify_images: true    # open every image and convert to RGB; lists failures
+  tree_max_depth: 3

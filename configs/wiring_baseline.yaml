@@ -20,7 +20,7 @@
 
 run_id: wiring_baseline
 
-env: local
+env: kaggle
 seed: 0
 device: cuda
 
@@ -32,10 +32,10 @@ paths:
     lisc_root: data/raw/LISC
     results_dir: results
   kaggle:
-    pbc_images: TODO_FILL
-    wbcatt_dir: TODO_FILL
-    raabin_root: TODO_FILL
-    lisc_root: TODO_FILL
+    pbc_images: /kaggle/input/datasets/anikakrishnaa/pbc-images/PBC_dataset_normal_DIB
+    wbcatt_dir: /kaggle/input/datasets/anikakrishnaa/wbcatt
+    raabin_root: /kaggle/input/datasets/anikakrishnaa/raabin-double-labeled
+    lisc_root: /kaggle/input/datasets/anikakrishnaa/lisc   # out of scope; expected absent
     results_dir: /kaggle/working/results
 
 data:

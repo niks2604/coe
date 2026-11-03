@@ -5,6 +5,7 @@ import yaml
 from conftest import DELETE
 from src.config import (
     IMAGENET_MEAN,
+    MPS_RUN_ID_PREFIXES,
     IMAGENET_STD,
     ConfigError,
     TargetDomainLeakage,
@@ -454,4 +455,70 @@ def test_wiring_yaml_matches_its_origin_in_every_protocol_field(name):
     headline = yaml.safe_load((_configs_dir() / origin).read_text())
     differing = {k for k in set(wiring) | set(headline)
                  if wiring.get(k) != headline.get(k)}
-    assert differing == {"run_id", "device"}, differing
+    # Subset, not equality: both now declare device: cuda, so device need not differ.
+    # What matters is that no protocol field does.
+    assert differing <= {"run_id", "device"}, differing
+
+
+# --- where a config is declared to run -----------------------------------------------
+
+def _experiment_docs():
+    """Every committed config that has a run_id, discovered by globbing.
+
+    Globbed rather than listed so a config added later is covered without anyone
+    remembering to edit this test.
+    """
+    docs = {}
+    for path in sorted(_configs_dir().glob("*.yaml")):
+        doc = yaml.safe_load(path.read_text())
+        if isinstance(doc, dict) and "run_id" in doc:
+            docs[path.name] = doc
+    return docs
+
+
+def test_every_non_debug_config_runs_on_the_kaggle_gpu():
+    """A wiring, tuning or final run belongs on the GPU and is declared that way in the
+    config, not chosen at the command line. Only smoke and debug configs stay local."""
+    offenders = {name: {"env": doc.get("env"), "device": doc.get("device")}
+                 for name, doc in _experiment_docs().items()
+                 if not doc["run_id"].startswith(MPS_RUN_ID_PREFIXES)
+                 and (doc.get("env") != "kaggle" or doc.get("device") != "cuda")}
+    assert not offenders, offenders
+
+
+def test_smoke_and_debug_configs_stay_local():
+    """The counterpart: a smoke config that quietly pointed at Kaggle would spend GPU
+    quota on a 500-image sanity check."""
+    offenders = {name: {"env": doc.get("env"), "device": doc.get("device")}
+                 for name, doc in _experiment_docs().items()
+                 if doc["run_id"].startswith(MPS_RUN_ID_PREFIXES)
+                 and doc.get("env") != "local"}
+    assert not offenders, offenders
+
+
+def test_kaggle_audit_config_loads():
+    """The audit can run on Kaggle from a committed config, with no CLI flag deciding
+    which tree it read (CLAUDE.md sec 5)."""
+    cfg = load_audit_config(_configs_dir() / "audit_kaggle.yaml")
+    assert cfg.env == "kaggle"
+    assert str(cfg.paths.results_dir) == "/kaggle/working/results"
+    assert "kaggle/input" in str(cfg.paths.pbc_images)
+
+
+def test_the_two_audit_configs_share_their_settings_and_local_paths():
+    a = yaml.safe_load((_configs_dir() / "audit.yaml").read_text())
+    b = yaml.safe_load((_configs_dir() / "audit_kaggle.yaml").read_text())
+    assert (a["env"], b["env"]) == ("local", "kaggle")
+    assert a["audit"] == b["audit"]
+    assert a["paths"]["local"] == b["paths"]["local"]
+
+
+def test_the_kaggle_audit_reads_the_same_tree_as_training():
+    """The invariant that makes an audit worth anything: if it reads a different tree
+    from the one the models train on, it has reconciled nothing."""
+    audit = yaml.safe_load((_configs_dir() / "audit_kaggle.yaml").read_text())
+    for name in ("baseline.yaml", "bottleneck.yaml", "control.yaml",
+                 "wiring_baseline.yaml", "wiring_bottleneck.yaml",
+                 "wiring_control.yaml"):
+        doc = yaml.safe_load((_configs_dir() / name).read_text())
+        assert doc["paths"]["kaggle"] == audit["paths"]["kaggle"], name
