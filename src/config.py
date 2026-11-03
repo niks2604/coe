@@ -48,6 +48,13 @@ ENVS = ("local", "kaggle")
 PATH_KEYS = ("pbc_images", "wbcatt_dir", "raabin_root", "lisc_root", "results_dir")
 TODO_SENTINEL = "TODO_FILL"
 
+DEVICES = ("cpu", "cuda", "mps")
+DEFAULT_DEVICE = "cpu"
+# MPS has no deterministic-algorithm guarantee and its cuDNN flags are no-ops, so a run
+# on it cannot be reproduced bit-for-bit as CLAUDE.md sec 5 requires. It is therefore
+# allowed for smoke and debug work only, never for a wiring, tuning or final run.
+MPS_RUN_ID_PREFIXES = ("smoke", "debug")
+
 MODEL_TYPES = ("baseline", "bottleneck", "control")
 BACKBONE_NORMS = ("batchnorm", "groupnorm")
 ATTRIBUTE_MODES = ("soft", "hard")
@@ -187,6 +194,52 @@ class AuditConfig:
     resolved: dict
 
 
+def _build_device(doc: dict) -> str:
+    """The device name, validated as policy only - availability is checked at use time.
+
+    Parsing stays hardware-independent on purpose: a checkpoint trained on CUDA embeds
+    its resolved config, and src.eval re-runs this loader over it, so a device check here
+    would make such a checkpoint unreadable on any other machine.
+    """
+    device = doc.get("device", DEFAULT_DEVICE)
+    if device not in DEVICES:
+        raise ConfigError(
+            f"device: {device!r} is not one of {list(DEVICES)}"
+        )
+    run_id = doc["run_id"]
+    if device == "mps" and not run_id.startswith(MPS_RUN_ID_PREFIXES):
+        raise ConfigError(
+            f"device: mps is for smoke and debug configs only, and run_id {run_id!r} is "
+            f"not one of those (expected a prefix in {list(MPS_RUN_ID_PREFIXES)}). MPS "
+            f"cannot honour the deterministic-kernel requirement in CLAUDE.md sec 5, so "
+            f"a wiring, tuning or final run may not use it."
+        )
+    return device
+
+
+def resolve_device(cfg) -> "Any":
+    """The config's device as a torch.device, or ConfigError if it is not available.
+
+    Never falls back to CPU: a results JSON claiming a GPU it did not use is worse than
+    a run that refuses to start, the same rule the ImageNet weights follow.
+    """
+    import torch
+
+    device = cfg.device
+    if device == "cuda" and not torch.cuda.is_available():
+        raise ConfigError(
+            "device: cuda was requested but torch.cuda.is_available() is False. Either "
+            "run where a CUDA device exists or set device explicitly in the config; "
+            "this never falls back to cpu silently."
+        )
+    if device == "mps" and not torch.backends.mps.is_available():
+        raise ConfigError(
+            "device: mps was requested but torch.backends.mps.is_available() is False; "
+            "this never falls back to cpu silently."
+        )
+    return torch.device(device)
+
+
 @dataclass(frozen=True)
 class Config:
     run_id: str
@@ -200,6 +253,7 @@ class Config:
     bootstrap: BootstrapCfg
     resolved: dict
     bottleneck: BottleneckCfg | None = None
+    device: str = DEFAULT_DEVICE
 
 
 # --- shared sections --------------------------------------------------------------------
@@ -290,8 +344,10 @@ def load_audit_config(path: str | Path) -> AuditConfig:
 # --- experiment config ----------------------------------------------------------------------
 
 EXP_TOP = {"run_id", "env", "seed", "paths", "data", "model", "bottleneck",
-           "train", "eval", "bootstrap"}
-EXP_REQUIRED = EXP_TOP - {"bottleneck"}
+           "train", "eval", "bootstrap", "device"}
+# device is optional in the schema so short test configs stay valid, exactly as
+# lr_schedule and warmup_epochs are; a test requires it of every committed experiment.
+EXP_REQUIRED = EXP_TOP - {"bottleneck", "device"}
 
 DATA_KEYS = {"class_mapping", "label_space", "source", "image_size",
              "subset_n_images", "normalization"}
@@ -691,11 +747,13 @@ def load_config(path: str | Path) -> Config:
     train = _build_train(doc)
     eval_cfg = _build_eval(doc, model.type, data.class_mapping)
     bootstrap = _build_bootstrap(doc)
+    device = _build_device(doc)
 
     resolved = {
         "run_id": doc["run_id"],
         "env": env,
         "seed": seed,
+        "device": device,
         "paths": paths_resolved,
         "data": data_resolved,
         "model": {"type": model.type, "backbone": model.backbone,
@@ -730,7 +788,7 @@ def load_config(path: str | Path) -> Config:
     return Config(
         run_id=doc["run_id"], env=env, seed=seed, paths=paths, data=data, model=model,
         train=train, eval=eval_cfg, bootstrap=bootstrap, bottleneck=bottleneck,
-        resolved=resolved,
+        device=device, resolved=resolved,
     )
 
 
@@ -783,7 +841,7 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
-def run_metadata() -> dict:
+def run_metadata(device: str | None = None) -> dict:
     """Git state and hardware, for results/<run_id>.json (CLAUDE.md sec 5)."""
     try:
         commit = _git("rev-parse", "HEAD")
@@ -804,6 +862,9 @@ def run_metadata() -> dict:
     else:
         meta["torch"] = torch.__version__
         meta["cuda"] = torch.version.cuda
-        meta["device"] = (torch.cuda.get_device_name(0)
-                          if torch.cuda.is_available() else "cpu")
+        # The resolved device, passed in by whoever ran the model. Inferring it from
+        # availability recorded an MPS run as a CPU run.
+        meta["device"] = device if device is not None else "unknown"
+        if device == "cuda" and torch.cuda.is_available():
+            meta["cuda_device_name"] = torch.cuda.get_device_name(0)
     return meta

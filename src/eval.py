@@ -24,7 +24,7 @@ from pathlib import Path
 
 import torch
 
-from src.config import Config, load_config, run_metadata
+from src.config import Config, load_config, resolve_device, run_metadata
 from src.data.datasets import build_secondary_subset
 from src.data.domains import Domain, domain_of, load_class_mapping
 from src.data.label_space import load_label_space
@@ -44,6 +44,7 @@ from src.metrics import (
     expected_calibration_error,
     gap_with_ci,
     macro_f1_present,
+    mean_max_probability,
     per_attribute_accuracy,
     per_class_recall,
     present_classes,
@@ -136,13 +137,16 @@ def _buffer_hash(model) -> str:
 # --- one pass -------------------------------------------------------------------------
 
 @torch.no_grad()
-def _collect(model, loader, modes: list[str], observed: dict) -> dict:
+def _collect(model, loader, modes: list[str], observed: dict, device) -> dict:
     """Run a loader once and gather predictions for each attribute mode."""
     out = {mode: {"y_true": [], "y_pred": [], "confidence": []} for mode in modes}
     attribute_true: list[list[int]] = []
     attribute_pred: list[list[int]] = []
 
     for images, labels, attributes in loader:
+        images, labels = images.to(device), labels.to(device)
+        if attributes is not None:
+            attributes = attributes.to(device)
         observed["model_training_mode_seen"] |= bool(model.training)
         observed["grad_enabled_seen"] |= bool(torch.is_grad_enabled())
 
@@ -185,6 +189,9 @@ def _score(cfg, predictions: dict, classes: list[str], thresholds) -> dict:
         "macro_f1_classes": present,
         "per_class_recall": per_class_recall(y_true, y_pred, classes),
         "ece": expected_calibration_error(confidence, correct, cfg.eval.ece_bins),
+        # Beside ECE on purpose: ECE cannot distinguish confidently wrong from
+        # diffidently right, and the two mean opposite things for the abstention curve.
+        "mean_max_probability": mean_max_probability(confidence),
         "accuracy": sum(correct) / len(correct) if correct else None,
     }
     if cfg.bootstrap.enabled:
@@ -204,6 +211,10 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
     started = time.time()
     checkpoint = Path(checkpoint)
     cfg, mapping, label_space, model, payload = load_checkpoint(checkpoint)
+    # Resolved here rather than in load_checkpoint, which stays hardware-independent so
+    # a checkpoint can be inspected anywhere; this raises if the device is unavailable.
+    device = resolve_device(cfg)
+    model.to(device)
     classes = label_space.classes
     modes = cfg.eval.attribute_modes or ["soft"]
     observed = {"model_training_mode_seen": False, "grad_enabled_seen": False}
@@ -231,7 +242,7 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
 
     # Thresholds come from pbc_val and are then applied unchanged everywhere.
     val_loader = make_eval_loader(cfg, DRY_RUN_DOMAIN, mapping, label_space)
-    val = _collect(model, val_loader, modes, observed)
+    val = _collect(model, val_loader, modes, observed, device)
     thresholds = {
         mode: select_abstention_thresholds(
             DRY_RUN_DOMAIN, val["modes"][mode]["confidence"],
@@ -253,7 +264,7 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
             if loader is None:
                 skipped[domain] = "not present on disk"
                 continue
-            collected = _collect(model, loader, modes, observed)
+            collected = _collect(model, loader, modes, observed, device)
 
         results[domain] = {mode: _score(cfg, collected["modes"][mode], classes,
                                         thresholds[mode]) for mode in modes}
@@ -306,7 +317,7 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
                     stratify_by=cfg.bootstrap.stratify_by)
 
     after = _buffer_hash(model)
-    meta = run_metadata()
+    meta = run_metadata(device=cfg.device)
     out = {
         "run_id": cfg.run_id,
         "seed": cfg.seed,

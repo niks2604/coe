@@ -104,6 +104,30 @@ def test_overfit_diagnostic_never_imports_a_target_loader():
     assert "make_train_loader" in source
 
 
+def test_capacity_diagnostic_never_imports_a_target_loader():
+    """Same structural rule again: the capacity diagnostic reads pbc_train's CSV and
+    nothing else, and cannot reach a target domain."""
+    import inspect
+
+    import scripts.classifier_capacity as capacity_mod
+
+    source = inspect.getsource(capacity_mod)
+    assert "make_eval_loader" not in source
+    assert "raabin" not in source.lower()
+
+
+def test_capacity_diagnostic_reads_only_the_train_split():
+    """Not pbc_val, which is the tuning split, and not pbc_test, which is held out."""
+    import inspect
+
+    import scripts.classifier_capacity as capacity_mod
+
+    source = inspect.getsource(capacity_mod)
+    assert "pbc_attr_v1_train.csv" in source
+    assert "pbc_attr_v1_val" not in source
+    assert "pbc_attr_v1_test" not in source
+
+
 def test_train_module_uses_only_the_pinned_split_factories():
     import inspect
 
@@ -194,3 +218,111 @@ def test_tuning_trials_record_their_single_seed(grid_path):
     (CLAUDE.md sec 5)."""
     trials = load_grid(grid_path)
     assert all("seed" not in t for t in trials)
+
+
+# --- diagnostics: the two loss terms are recorded separately --------------------------
+
+def _tiny(experiment_config, **overrides):
+    base = {"data.image_size": 32, "train.batch_size": 2, "train.epochs": 1}
+    base.update(overrides)
+    return load_config(experiment_config(**base))
+
+
+def test_history_separates_the_class_and_attribute_loss(experiment_config,
+                                                        tiny_raw_loadable, mapping,
+                                                        label_space, tmp_path):
+    """A single blended number cannot tell "the class head is stuck" from "the attribute
+    heads are stuck", which is the question the smoke run could not answer."""
+    from src.train import train
+
+    cfg = _tiny(experiment_config)
+    row = train(cfg, mapping, label_space, out_dir=tmp_path)["history"][0]
+    for key in ("train_class_loss", "train_attribute_loss_unscaled",
+                "val_class_loss", "val_attribute_loss_unscaled"):
+        assert key in row, f"history row does not record {key}"
+    assert row["train_attribute_loss_unscaled"] > 0    # lambda is 1.0 here
+    assert row["train_class_loss"] > 0
+
+
+def test_the_control_records_a_zero_attribute_loss(experiment_config,
+                                                   tiny_raw_loadable, mapping,
+                                                   label_space, tmp_path):
+    """lambda 0 means the term is not computed at all, and the record must say 0 rather
+    than omit it - an absent key reads as "not measured"."""
+    from src.train import train
+
+    cfg = _tiny(experiment_config, **{"model.type": "control",
+                                      "bottleneck.attribute_loss_weight": 0.0})
+    row = train(cfg, mapping, label_space, out_dir=tmp_path)["history"][0]
+    assert row["train_attribute_loss_unscaled"] == 0.0
+    assert row["val_attribute_loss_unscaled"] == 0.0
+
+
+# --- per-attribute pbc_val accuracy is MONITORING ONLY --------------------------------
+
+def test_val_per_attribute_accuracy_is_recorded_for_monitoring(experiment_config,
+                                                               tiny_raw_loadable,
+                                                               mapping, label_space,
+                                                               tmp_path):
+    from src.train import train
+
+    cfg = _tiny(experiment_config)
+    row = train(cfg, mapping, label_space, out_dir=tmp_path)["history"][0]
+    assert "monitor_val_per_attribute" in row
+    assert len(row["monitor_val_per_attribute"]) == 11
+
+
+def test_every_per_attribute_val_key_is_marked_as_monitoring(experiment_config,
+                                                             tiny_raw_loadable,
+                                                             mapping, label_space,
+                                                             tmp_path):
+    """CLAUDE.md sec 6 reports per-attribute accuracy on pbc_test. Reading it on pbc_val
+    is a monitoring exception, so the key says so and cannot be mistaken for a
+    reportable metric."""
+    from src.train import train
+
+    cfg = _tiny(experiment_config)
+    row = train(cfg, mapping, label_space, out_dir=tmp_path)["history"][0]
+    assert all(key.startswith("monitor_")
+               for key in row if "per_attribute" in key)
+
+
+def test_select_best_epoch_ignores_monitoring_keys():
+    """Selection is pbc_val macro-F1 and nothing else. An epoch with far better
+    attribute accuracy must not win on that basis."""
+    history = [{"epoch": 0, "val_macro_f1": 0.90,
+                "monitor_val_per_attribute": {"cell_size": {"accuracy": 0.10}}},
+               {"epoch": 1, "val_macro_f1": 0.80,
+                "monitor_val_per_attribute": {"cell_size": {"accuracy": 0.99}}}]
+    assert select_best_epoch(history)["epoch"] == 0
+
+
+def test_selection_reads_no_monitoring_key():
+    """Structural: whatever else lands in a history row, the selector must not read it."""
+    import inspect
+
+    import src.train as train_mod
+
+    assert "monitor" not in inspect.getsource(train_mod.select_best_epoch)
+
+
+# --- early stopping is reported, not inferred -----------------------------------------
+
+def test_result_reports_whether_early_stopping_fired(experiment_config,
+                                                     tiny_raw_loadable, mapping,
+                                                     label_space, tmp_path):
+    """The wiring check declares a maximum epoch count; a run that stopped at 7 of 30
+    must not be read as having used the declared budget."""
+    from src.train import train
+
+    cfg = _tiny(experiment_config, **{"train.epochs": 3,
+                                      "train.early_stopping.patience": 1})
+    result = train(cfg, mapping, label_space, out_dir=tmp_path)
+    assert isinstance(result["early_stopped"], bool)
+    assert result["epochs_run"] <= cfg.train.epochs
+    if result["early_stopped"]:
+        assert result["epochs_run"] < cfg.train.epochs
+        assert result["stopped_after_epoch"] == result["epochs_run"] - 1
+    else:
+        assert result["epochs_run"] == cfg.train.epochs
+        assert result["stopped_after_epoch"] is None

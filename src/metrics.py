@@ -270,11 +270,18 @@ def gap_with_ci(source, target, metric_fn, n: int, ci: float, seed: int,
 # --- attributes ---------------------------------------------------------------------------------
 
 def per_attribute_accuracy(attribute_true, attribute_pred, label_space) -> dict:
-    """Accuracy and balanced accuracy per attribute column. pbc_test only.
+    """Accuracy, balanced accuracy and the majority-class rate per attribute column.
+
+    Reported on pbc_test (CLAUDE.md sec 6). Also computed on pbc_val per epoch as
+    MONITORING ONLY, which is a declared exception: the value is recorded under a
+    monitor_ key and nothing may select on it. Never computable on a target domain,
+    which has no attribute labels at all.
 
     Balanced accuracy as well as accuracy because the vocabularies are imbalanced -
     granule_type runs nil 2631 against coarse 1216 - so a head that has learned only the
-    majority value still scores well on accuracy (CLAUDE.md sec 6).
+    majority value still scores well on accuracy. majority_rate is that head's score,
+    reported alongside so "above the majority rate" can be checked without recomputing
+    it, and so it is visible how weak a bar that is.
     """
     if attribute_true is None or attribute_pred is None:
         raise ValueError(
@@ -299,10 +306,25 @@ def per_attribute_accuracy(attribute_true, attribute_pred, label_space) -> dict:
             correct = sum(1 for t, p in zip(true, pred) if t == value and p == value)
             per_value_recall.append(correct / total)
 
+        counts = Counter(true)
         out[column] = {
             "accuracy": hits / len(true) if true else None,
             "balanced_accuracy": (sum(per_value_recall) / len(per_value_recall)
                                   if per_value_recall else None),
+            "majority_rate": (max(counts.values()) / len(true)) if true else None,
             "n_values_present": len(per_value_recall),
         }
     return out
+
+
+def mean_max_probability(confidence) -> float | None:
+    """Mean of the predicted-class probabilities.
+
+    Reported next to ECE because ECE alone is ambiguous: a large value can mean a model
+    that is confidently wrong or one that is diffidently right, and the two call for
+    opposite responses. None when there is nothing to average.
+    """
+    values = list(confidence)
+    if not values:
+        return None
+    return sum(float(v) for v in values) / len(values)

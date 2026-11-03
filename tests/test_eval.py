@@ -244,3 +244,18 @@ def test_full_run_does_open_the_target_root(trained, tmp_path, monkeypatch):
                         lambda p: (opened.append(str(p)), original(p))[1])
     evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl")
     assert [p for p in opened if p.startswith(str(cfg.paths.raabin_root))]
+
+
+# --- mean max probability, beside ECE -------------------------------------------------
+
+def test_score_reports_mean_max_probability_next_to_ece(trained):
+    """ECE alone cannot distinguish a confidently wrong model from a diffident one, and
+    the smoke run produced an ECE of 0.56 with no way to see which it was."""
+    from src.eval import _score
+
+    cfg, _ = trained
+    classes = ["neutrophil", "lymphocyte", "monocyte", "eosinophil", "basophil"]
+    predictions = {"y_true": [0, 1], "y_pred": [0, 1], "confidence": [0.9, 0.7]}
+    scored = _score(cfg, predictions, classes, None)
+    assert scored["mean_max_probability"] == pytest.approx(0.8)
+    assert "ece" in scored

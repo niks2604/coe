@@ -285,3 +285,45 @@ def test_per_attribute_accuracy_refuses_missing_labels(label_space):
     """Raabin has no attribute labels, so this must raise rather than return zeros."""
     with pytest.raises(ValueError, match="attribute labels"):
         per_attribute_accuracy(None, [[0] * 11], label_space)
+
+
+# --- majority rate, beside balanced accuracy ------------------------------------------
+
+def test_majority_rate_is_reported_per_attribute(label_space):
+    """"Accuracy above the majority-class rate" is the wiring-check bar, so the rate is
+    reported next to the accuracy rather than left for the reader to recompute."""
+    true = [[0] * 11, [0] * 11, [0] * 11, [1] + [0] * 10]
+    pred = [[0] * 11] * 4
+    out = per_attribute_accuracy(true, pred, label_space)
+    assert out["cell_size"]["majority_rate"] == pytest.approx(3 / 4)
+    assert out["cell_size"]["accuracy"] == pytest.approx(3 / 4)
+    assert out["cell_shape"]["majority_rate"] == pytest.approx(1.0)
+
+
+def test_majority_rate_sits_beside_balanced_accuracy(label_space):
+    out = per_attribute_accuracy([[0] * 11], [[0] * 11], label_space)
+    assert set(out["cell_size"]) >= {"accuracy", "balanced_accuracy", "majority_rate",
+                                     "n_values_present"}
+
+
+def test_a_majority_predicting_head_matches_the_rate_it_must_beat(label_space):
+    """The bar is weak by construction: a head that always answers the majority value
+    ties the rate exactly, which is why balanced accuracy is reported too."""
+    true = [[0] * 11, [0] * 11, [0] * 11, [1] + [0] * 10]
+    out = per_attribute_accuracy(true, [[0] * 11] * 4, label_space)
+    assert out["cell_size"]["accuracy"] == pytest.approx(out["cell_size"]["majority_rate"])
+    assert out["cell_size"]["balanced_accuracy"] == pytest.approx(0.5)
+
+
+# --- mean max probability, beside ECE -------------------------------------------------
+
+def test_mean_max_probability_is_the_mean_confidence():
+    from src.metrics import mean_max_probability
+
+    assert mean_max_probability([0.6, 0.8, 1.0]) == pytest.approx(0.8)
+
+
+def test_mean_max_probability_is_none_when_there_is_nothing_to_average():
+    from src.metrics import mean_max_probability
+
+    assert mean_max_probability([]) is None

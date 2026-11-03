@@ -307,7 +307,11 @@ def test_audit_config_rejects_unknown_keys(audit_config):
 # --- the committed experiment YAMLs state the protocol fields explicitly ----------
 
 EXPERIMENT_YAMLS = ("baseline.yaml", "bottleneck.yaml", "control.yaml",
-                    "smoke.yaml", "smoke_baseline.yaml", "smoke_control.yaml")
+                    "smoke.yaml", "smoke_baseline.yaml", "smoke_control.yaml",
+                    "wiring_baseline.yaml", "wiring_bottleneck.yaml",
+                    "wiring_control.yaml")
+
+WIRING_YAMLS = ("wiring_baseline.yaml", "wiring_bottleneck.yaml", "wiring_control.yaml")
 
 
 def _configs_dir():
@@ -352,3 +356,102 @@ def test_the_three_headline_configs_share_every_protocol_field():
     for n, doc in docs.items():
         assert doc["model"]["backbone"] == "resnet50"
         assert doc["model"]["backbone_norm"] == "batchnorm", f"{n} is not the headline arm"
+
+
+# --- device ---------------------------------------------------------------------------
+
+def test_device_defaults_to_cpu_when_absent(experiment_config):
+    """Optional in the schema so short test configs stay valid, exactly as lr_schedule
+    and warmup_epochs are. Every committed experiment YAML must still state it."""
+    assert load_config(experiment_config()).device == "cpu"
+
+
+def test_unknown_device_is_rejected(experiment_config):
+    # Matches on the offending value, not on "device": the tmp_path in the message
+    # contains the test name and would satisfy a looser match on its own.
+    with pytest.raises(ConfigError, match="tpu"):
+        load_config(experiment_config(**{"device": "tpu"}))
+
+
+def test_resolved_config_records_the_device(experiment_config):
+    cfg = load_config(experiment_config(**{"device": "cpu"}))
+    assert cfg.resolved["device"] == "cpu"
+
+
+def test_mps_is_accepted_for_a_smoke_config(experiment_config):
+    """MPS cannot give bit-identical reruns, so it is for smoke and debug work only."""
+    cfg = load_config(experiment_config(**{"device": "mps", "run_id": "smoke_baseline"}))
+    assert cfg.device == "mps"
+
+
+@pytest.mark.parametrize("run_id", ["bottleneck", "baseline", "control",
+                                    "wiring_bottleneck", "tuning_trial_3"])
+def test_mps_is_rejected_for_any_non_debug_config(experiment_config, run_id):
+    """Deterministic cuDNN is mandated by CLAUDE.md sec 5 and MPS cannot honour it, so a
+    wiring, tuning or final run may not use it."""
+    with pytest.raises(ConfigError, match="debug"):
+        load_config(experiment_config(**{"device": "mps", "run_id": run_id}))
+
+
+def test_cpu_always_resolves(experiment_config):
+    from src.config import resolve_device
+
+    assert resolve_device(load_config(experiment_config())).type == "cpu"
+
+
+def test_resolve_device_raises_for_an_unavailable_device(experiment_config):
+    """Never a silent fall back to CPU: a run that reports a GPU it did not use is
+    worse than a run that fails."""
+    import torch
+
+    from src.config import resolve_device
+
+    if not torch.cuda.is_available():
+        unavailable, run_id = "cuda", "bottleneck"
+    elif not torch.backends.mps.is_available():
+        unavailable, run_id = "mps", "smoke"
+    else:
+        pytest.skip("every device is available on this machine")
+    cfg = load_config(experiment_config(**{"device": unavailable, "run_id": run_id}))
+    with pytest.raises(ConfigError, match=unavailable):
+        resolve_device(cfg)
+
+
+def test_run_metadata_records_the_resolved_device():
+    """The old record said "cpu" unless CUDA was present, so an MPS run would have been
+    written down as a CPU run."""
+    assert run_metadata(device="mps")["device"] == "mps"
+
+
+@pytest.mark.parametrize("name", EXPERIMENT_YAMLS)
+def test_experiment_yaml_states_the_device_explicitly(name):
+    """Optional in the schema, mandatory in a committed experiment: which device a run
+    used belongs in the config and in the results record, not in a Python default."""
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert "device" in doc, f"{name} does not state device"
+
+
+@pytest.mark.parametrize("name", WIRING_YAMLS)
+def test_wiring_yaml_never_uses_mps(name):
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert doc["device"] != "mps"
+
+
+@pytest.mark.parametrize("name", WIRING_YAMLS)
+def test_wiring_yaml_has_its_own_run_id(name):
+    """A wiring run selects nothing, so its results must not land on top of a headline
+    run's files."""
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert doc["run_id"].startswith("wiring_")
+
+
+@pytest.mark.parametrize("name", WIRING_YAMLS)
+def test_wiring_yaml_matches_its_origin_in_every_protocol_field(name):
+    """The wiring check must run the declared mid-grid settings, not a variant of them:
+    only run_id and device may differ from the headline config it mirrors."""
+    origin = name.replace("wiring_", "")
+    wiring = yaml.safe_load((_configs_dir() / name).read_text())
+    headline = yaml.safe_load((_configs_dir() / origin).read_text())
+    differing = {k for k in set(wiring) | set(headline)
+                 if wiring.get(k) != headline.get(k)}
+    assert differing == {"run_id", "device"}, differing

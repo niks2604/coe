@@ -15,6 +15,7 @@ run_id: control
 
 env: local
 seed: 0
+device: cpu                 # cpu | cuda | mps; mps is for smoke/debug only
 
 paths:
   local:

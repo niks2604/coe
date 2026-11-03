@@ -20,12 +20,12 @@ from pathlib import Path
 
 import torch
 
-from src.config import load_config, run_metadata, set_seed
+from src.config import load_config, resolve_device, run_metadata, set_seed
 from src.data.domains import load_class_mapping
 from src.data.label_space import load_label_space
 from src.data.loaders import make_train_loader, make_val_loader
 from src.losses import class_weights_from, compute_loss
-from src.metrics import macro_f1_present
+from src.metrics import macro_f1_present, per_attribute_accuracy
 
 SELECTION_METRIC = "val_macro_f1"
 
@@ -58,7 +58,7 @@ def checkpoint_payload(cfg, state_dict, history: list[dict], group_offsets) -> d
     so the 31 classifier inputs stay interpretable as (column, value) pairs.
     """
     best = select_best_epoch(history)
-    meta = run_metadata()
+    meta = run_metadata(device=cfg.device)
     return {
         "state_dict": state_dict,
         "config": cfg.resolved,
@@ -115,29 +115,59 @@ def build_optimizer_and_schedule(model, cfg):
 # --- evaluation on the source val split ----------------------------------------------------
 
 @torch.no_grad()
-def _validate(model, loader, cfg, class_weights, classes) -> dict:
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else float("nan")
+
+
+def _validate(model, loader, cfg, class_weights, classes, label_space, device) -> dict:
     """pbc_val only. Called with the model in eval mode so batch statistics are frozen."""
     was_training = model.training
     model.eval()
     y_true: list[int] = []
     y_pred: list[int] = []
     losses: list[float] = []
+    class_losses: list[float] = []
+    attribute_losses: list[float] = []
+    attribute_true: list[list[int]] = []
+    attribute_pred: list[list[int]] = []
+
     for images, labels, attributes in loader:
+        images, labels = images.to(device), labels.to(device)
+        if attributes is not None:
+            attributes = attributes.to(device)
         output = model(images)
-        total, _ = compute_loss(output, (labels, attributes), cfg, class_weights)
+        total, parts = compute_loss(output, (labels, attributes), cfg, class_weights)
         losses.append(float(total))
+        class_losses.append(float(parts["class"]))
+        attribute_losses.append(float(parts["attribute"]))
         y_true.extend(int(v) for v in labels)
         y_pred.extend(int(v) for v in output.class_logits.argmax(dim=1))
+        if output.attribute_logits is not None and attributes is not None:
+            attribute_true.extend([int(v) for v in row] for row in attributes)
+            attribute_pred.extend(
+                [int(group.argmax(dim=0)) for group in row]
+                for row in zip(*[logits for logits in output.attribute_logits]))
     if was_training:
         model.train()
 
     macro_f1, present = macro_f1_present(y_true, y_pred, classes)
-    return {
+    row = {
         SELECTION_METRIC: macro_f1,
         "val_present_classes": present,
-        "val_loss": sum(losses) / len(losses) if losses else float("nan"),
+        "val_loss": _mean(losses),
+        # The two terms separately: one blended number cannot distinguish "the class
+        # head is stuck" from "the attribute heads are stuck".
+        "val_class_loss": _mean(class_losses),
+        "val_attribute_loss_unscaled": _mean(attribute_losses),
         "n_val": len(y_true),
     }
+    if attribute_true:
+        # MONITORING ONLY, a declared exception to the pbc_test-only rule in CLAUDE.md
+        # sec 6. The monitor_ prefix marks it unselectable, and select_best_epoch reads
+        # SELECTION_METRIC and nothing else - there is a test for both.
+        row["monitor_val_per_attribute"] = per_attribute_accuracy(
+            attribute_true, attribute_pred, label_space)
+    return row
 
 
 # --- the loop -------------------------------------------------------------------------------
@@ -150,12 +180,15 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()
     seeding = set_seed(cfg.seed)
+    device = resolve_device(cfg)
 
     train_loader = make_train_loader(cfg, mapping, label_space)
     val_loader = make_val_loader(cfg, mapping, label_space)
     class_weights = class_weights_from(train_loader.dataset, cfg, label_space)
+    if class_weights is not None:
+        class_weights = class_weights.to(device)
 
-    model = build_model(cfg, label_space)
+    model = build_model(cfg, label_space).to(device)
     optimizer, schedule = build_optimizer_and_schedule(model, cfg)
     classes = label_space.classes
 
@@ -165,24 +198,35 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
     best_metric = -math.inf
     patience = cfg.train.early_stopping["patience"]
     since_improved = 0
+    early_stopped = False
 
     for epoch in range(cfg.train.epochs):
         epoch_started = time.time()
         model.train()
         batch_losses: list[float] = []
+        batch_class_losses: list[float] = []
+        batch_attribute_losses: list[float] = []
         for images, labels, attributes in train_loader:
+            images, labels = images.to(device), labels.to(device)
+            if attributes is not None:
+                attributes = attributes.to(device)
             optimizer.zero_grad(set_to_none=True)
             output = model(images)
             total, parts = compute_loss(output, (labels, attributes), cfg, class_weights)
             total.backward()
             optimizer.step()
             batch_losses.append(float(total))
+            batch_class_losses.append(float(parts["class"]))
+            batch_attribute_losses.append(float(parts["attribute"]))
         schedule.step()
 
         row = {"epoch": epoch,
-               "train_loss": sum(batch_losses) / len(batch_losses) if batch_losses else float("nan"),
+               "train_loss": _mean(batch_losses),
+               "train_class_loss": _mean(batch_class_losses),
+               "train_attribute_loss_unscaled": _mean(batch_attribute_losses),
                "lr": optimizer.param_groups[0]["lr"]}
-        row.update(_validate(model, val_loader, cfg, class_weights, classes))
+        row.update(_validate(model, val_loader, cfg, class_weights, classes,
+                             label_space, device))
         seconds_per_epoch.append(time.time() - epoch_started)
         row["seconds"] = seconds_per_epoch[-1]
         history.append(row)
@@ -194,13 +238,14 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
         else:
             since_improved += 1
             if since_improved >= patience:
+                early_stopped = True
                 break
 
     payload = checkpoint_payload(cfg, best_state or model.state_dict(), history,
                                  getattr(model, "group_offsets", []))
     torch.save(payload, out_dir / "best.pt")
 
-    meta = run_metadata()
+    meta = run_metadata(device=cfg.device)
     result = {
         "run_id": cfg.run_id,
         "seed": cfg.seed,
@@ -217,6 +262,10 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
         "n_train": len(train_loader.dataset),
         "n_val": len(val_loader.dataset),
         "epochs_run": len(history),
+        # A run that stopped at 7 of 30 must not read as having used the declared
+        # budget, so this is recorded rather than inferred from epochs_run.
+        "early_stopped": early_stopped,
+        "stopped_after_epoch": (history[-1]["epoch"] if early_stopped else None),
         "seconds_per_epoch": seconds_per_epoch,
         "wall_clock_seconds": time.time() - started,
         "checkpoint": str(out_dir / "best.pt"),
