@@ -90,6 +90,20 @@ def test_train_module_never_imports_a_target_loader():
     assert "raabin" not in source.lower()
 
 
+def test_overfit_diagnostic_never_imports_a_target_loader():
+    """The overfit-one-batch diagnostic is held to the same structural rule as
+    src.train: it reads pbc_train through the pinned factory and cannot reach a target
+    domain at all."""
+    import inspect
+
+    import scripts.overfit_one_batch as overfit_mod
+
+    source = inspect.getsource(overfit_mod)
+    assert "make_eval_loader" not in source
+    assert "raabin" not in source.lower()
+    assert "make_train_loader" in source
+
+
 def test_train_module_uses_only_the_pinned_split_factories():
     import inspect
 
