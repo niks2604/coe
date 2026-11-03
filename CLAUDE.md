@@ -96,6 +96,14 @@ AdamW, cosine schedule with a short linear warmup over a fixed maximum epoch cou
 Augmentation as in the configs, and the colour-jitter caps in src/config.py.
 lambda (bottleneck attribute loss weight) fixed at 1.0. It is not in the tuning grid: it exists only for the bottleneck, so tuning it would hand the bottleneck a larger search budget than the baseline. Any lambda exploration is a separate, labelled sweep that does not feed the headline comparison.
 
+Wiring check. Before the grid runs, each model is trained once on the full source domain at one mid-grid configuration — lr 3e-4, weight decay 1e-4, class_weighting none — for the declared maximum epoch count. It is source-only, it selects nothing, and its run_id is prefixed wiring_ so its results can never be mistaken for a grid trial. The configs are configs/wiring_{baseline,bottleneck,control}.yaml, which differ from the headline configs in run_id and device alone, and a test enforces that.
+
+Decision rule. Pass for the bottleneck at lambda 1.0: pbc_val macro-F1 within 0.05 of the baseline, and per-attribute pbc_val accuracy above the majority-class rate on at least 9 of 11 attributes. Pass means the declared grid proceeds with lambda unchanged. On a fail: look for bugs first; if none is found, lambda becomes a supervisor-level protocol decision, logged in section 8 before any further run. A bottleneck that fails to train is a training failure, not a negative result — reporting it as evidence against the hypothesis would be wrong.
+
+Step budget. Any claim that a model does not train must state how many optimiser steps it had. Measured, on ground-truth attribute codes with everything but Linear(31,5) removed (scripts/classifier_capacity.py): 0.177 train accuracy at step 200, 0.9639 at 1,000, and 0.9895 at the declared 5,790. The classifier needs roughly a thousand steps before it is doing anything at all. The section 7 smoke test — 500 images, batch 16, 2 epochs — is 64 steps, so it can show that a pipeline runs and nothing whatever about trainability.
+
+Device. Every experiment config states device: cpu | cuda | mps. A requested device that is not available is a hard error, never a silent fall back to CPU, and the device actually resolved is recorded in the results JSON. Validation of the name is hardware-independent so a checkpoint trained on one device stays readable on another. MPS is for smoke and debug configs only: it has no deterministic-algorithm guarantee and its cuDNN flags are no-ops, so it cannot meet the seeding requirement above. src/config.py rejects it for any run_id not prefixed smoke or debug, which covers every wiring, tuning and final run.
+
 Tuning. A pre-declared grid in configs/tuning_grid.yaml, with an explicit tie-break order, run identically for all three models with the same number of trials. Selection is on pbc_val macro-F1. The grid file plus a trial index specifies a trial; each run still embeds its own fully resolved config.
 
 ImageNet weights. The backbone needs pretrained ResNet-50 weights. Either the environment has internet access, or the weights are supplied locally (on Kaggle, as an attached dataset). If neither is available the run fails with a clear message naming both options — it never silently trains from random initialisation, which would look like a weak result rather than a setup error.
@@ -125,6 +133,16 @@ Gap basis. A 5-class source number minus a 2-class target number is not a differ
 Per-class recall is null, not zero, for a class absent from an eval set. Zero reads as a model failure; null is the truth, which is that the number is not measurable there.
 
 Attributes. Per-attribute accuracy and per-attribute balanced accuracy, on pbc_test only — Raabin has no attribute labels. Balanced accuracy as well as accuracy because the attribute vocabularies are imbalanced (granule_type runs nil 2631 against coarse 1216), and plain accuracy would hide a head that has learned only the majority value. The attribute cross-entropy itself is unweighted.
+
+Monitoring exception. Per-attribute accuracy is also computed on pbc_val once per epoch, for monitoring only. It is what makes "the attribute heads fit perfectly and the class head is stuck" visible while a run is in progress instead of after it. It is recorded under a monitor_ prefixed key, it is never reported as a result, and nothing may select on it — selection is pbc_val macro-F1 and nothing else, and a test asserts the selector reads no monitor_ key.
+
+The majority-class rate is reported next to accuracy and balanced accuracy, because "above the majority rate" is the wiring check's bar and a head that always answers the majority value ties it exactly. Reporting the rate makes the weakness of that bar visible rather than leaving it to be recomputed.
+
+Information ceiling. The 11-attribute code determines the class for 99.25% of pbc_train: 286 distinct codes, 19 of which carry more than one class, covering 470 images. So the bottleneck caps accuracy at about 0.9925 and no lower. A bottleneck result far below that is a statement about the model, not about the representation's sufficiency.
+
+Loss terms. The class term and the summed attribute term are recorded separately per epoch, for both train and val, and the attribute term is recorded unscaled so lambda's effect stays visible. A single blended number cannot distinguish a stuck class head from stuck attribute heads.
+
+Mean maximum probability is reported beside ECE. ECE on its own cannot tell a confidently wrong model from a diffidently right one, and the two imply opposite readings of the abstention curve.
 
 Abstention. The headline number is accuracy at 90% nominal coverage, with the threshold taken from pbc_val and applied unchanged to every domain. All seven coverage levels in the config are reported. Coverage actually achieved on a target domain will differ from nominal, and that difference is itself a result.
 
