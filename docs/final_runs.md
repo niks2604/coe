@@ -28,21 +28,19 @@ original names; seeds 1 and 2 are new files differing in `seed` alone:
 Tests assert `seed` is the only field that differs, and that no two experiment configs
 can resolve to the same results directory.
 
-### 0.2 BLOCKER — `src/eval.py` writes no results JSON
+### 0.2 RESOLVED — evaluation writes its record
 
-`evaluate_checkpoint` returns its metrics and `main` prints a summary; nothing is
-written to disk. CLAUDE.md §5 requires every run to write
-`results/<run_id>.json` with the resolved config, the git state and all metrics per
-domain and per class. For training that happens. For evaluation it does not.
+Every evaluation now writes `<results_dir>/<run_id>_seed<seed>_eval.json` containing
+everything `evaluate_checkpoint` returns: all metrics per domain and per mode, the
+checkpoint hash, the resolved config, the git state, the selection role and rule, the
+abstention thresholds and the buffer hashes. A dry run writes
+`..._eval_dryrun.json` instead, so a cheap repeatable run cannot overwrite the record
+of the one look.
 
-The consequence is specific and bad: the **one-time** Raabin evaluation would leave its
-numbers in notebook stdout only. The ledger would record that the look happened, with
-the checkpoint hash and the domain, but not what was found. A Kaggle session that is
-closed, or a log that scrolls, loses the result of a measurement the protocol allows you
-to take once.
-
-**Fix this before section 4.** It is a small change — write `out` to
-`<results_dir>/<run_id>_seed<seed>_eval.json` — but it is not yet made.
+The record is written **before** any ledger line, and a failed write aborts before the
+ledger is touched: an entry saying a domain was looked at, with nothing saying what was
+found, would spend the look and keep nothing. An existing record is not overwritten
+without `--override-reason`.
 
 ### 0.3 ImageNet weights
 
@@ -68,7 +66,7 @@ before adding to it.
 ### 0.5 Pre-run checklist
 
 - [ ] 0.1 decided and the six configs committed, with a test
-- [ ] 0.2 fixed and committed
+- [ ] 0.2 is in place (nothing to do)
 - [ ] 0.3 decided; `imagenet_weights` consistent across all nine configs
 - [ ] `target_eval_ledger.jsonl` is 0 lines
 - [ ] Working tree clean and pushed — every result records the commit and a dirty flag,
@@ -264,8 +262,7 @@ count before and after rather than assuming.
 ## 5. The one-time Raabin evaluation
 
 Separate booking, after all nine training runs are complete and their checkpoints are
-backed up. Read section 0.2 first: as the code stands, this produces numbers that exist
-only in the notebook log.
+backed up.
 
 ### 5.1 What one command does
 
@@ -297,9 +294,12 @@ discarded; `src/eval.py` refuses it outright (`3b00627`) unless you pass
 `--override-reason`, and there is no good reason to pass one here.
 
 Each cell prints macro-F1 and ECE per domain per attribute mode, the class list each
-macro-F1 was computed over, and whether the model's buffers changed during evaluation
-(they must not). The abstention threshold comes from `pbc_val` and is applied unchanged
-to every domain.
+macro-F1 was computed over, whether the model's buffers changed during evaluation (they
+must not), and the path of the record it wrote. The abstention threshold comes from
+`pbc_val` and is applied unchanged to every domain.
+
+**Download the nine `*_eval.json` files along with the ledger.** They are the only copy
+of the numbers; the ledger records only that the look happened.
 
 ### 5.3 Ledger rules for this section
 

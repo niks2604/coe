@@ -382,3 +382,110 @@ def test_main_refuses_an_informational_checkpoint(informational, tmp_path):
     with pytest.raises(EvalError, match="informational"):
         main(["--checkpoint", str(path), "--ledger", str(tmp_path / "l.jsonl"),
               "--dry-run"])
+
+
+# --- every evaluation leaves a results file -------------------------------------------
+
+def _eval_json(cfg, dry_run=False):
+    suffix = "_eval_dryrun" if dry_run else "_eval"
+    return cfg.paths.results_dir / f"{cfg.run_id}_seed{cfg.seed}{suffix}.json"
+
+
+def test_an_evaluation_writes_its_results_json(trained, tmp_path):
+    """CLAUDE.md sec 5 requires every run to write one. Without it the one-time Raabin
+    look would leave its numbers in notebook stdout only."""
+    import json
+
+    cfg, path = trained
+    out = evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl")
+    written = _eval_json(cfg)
+    assert written.is_file(), f"no results JSON at {written}"
+    record = json.loads(written.read_text())
+    assert record["checkpoint_sha256"] == out["checkpoint_sha256"]
+    assert record["domains"] == out["domains"]
+    # Round-tripped, because the coverage grid is keyed by float and JSON has only
+    # string keys. The record is otherwise everything evaluate_checkpoint returned.
+    assert record == json.loads(json.dumps(out, default=str))
+    assert record["selection_role"] == "headline"
+    assert record["selection_rule"] == "final_epoch"
+    assert record["config"]["run_id"] == cfg.run_id
+    assert out["results_json"] == str(written)
+
+
+def test_a_dry_run_writes_its_results_json_too(trained, tmp_path):
+    """It evaluates pbc_val only and writes no ledger line, but it still produces
+    numbers, and a number with no record is a number that cannot be checked."""
+    import json
+
+    cfg, path = trained
+    evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl", dry_run=True)
+    written = _eval_json(cfg, dry_run=True)
+    assert written.is_file(), f"no results JSON at {written}"
+    assert json.loads(written.read_text())["dry_run"] is True
+
+
+def test_a_dry_run_cannot_clobber_a_real_evaluation(trained, tmp_path):
+    """A dry run is cheap and repeated by design - the smoke test runs it. A full
+    evaluation of a target domain happens once. They must not share a filename."""
+    cfg, path = trained
+    assert _eval_json(cfg) != _eval_json(cfg, dry_run=True)
+    evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl")
+    evaluate_checkpoint(path, ledger_path=tmp_path / "l2.jsonl", dry_run=True)
+    assert _eval_json(cfg).is_file() and _eval_json(cfg, dry_run=True).is_file()
+
+
+def test_the_results_json_is_written_before_the_ledger_line(trained, tmp_path,
+                                                            monkeypatch):
+    """Order matters: a ledger line saying a domain was looked at, with no results file
+    saying what was found, spends the one look and records nothing."""
+    import src.eval as eval_mod
+
+    seen = {}
+
+    real = eval_mod.append_entry
+
+    def spy(path, entry):
+        seen.setdefault("results_existed", _eval_json(trained[0]).is_file())
+        return real(path, entry)
+
+    monkeypatch.setattr(eval_mod, "append_entry", spy)
+    _, path = trained
+    evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl")
+    assert seen["results_existed"] is True
+
+
+def test_a_failed_results_write_blocks_the_ledger_line(trained, tmp_path, monkeypatch):
+    """If the record cannot be written, the look must not be recorded as taken."""
+    import src.eval as eval_mod
+    from src.ledger import read_ledger
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(eval_mod, "_write_eval_results", boom)
+    ledger = tmp_path / "l.jsonl"
+    _, path = trained
+    with pytest.raises(OSError):
+        evaluate_checkpoint(path, ledger_path=ledger)
+    assert not ledger.exists() or read_ledger(ledger) == []
+
+
+def test_an_existing_evaluation_record_is_not_silently_overwritten(trained, tmp_path):
+    """run_id and seed do not identify a checkpoint: retrain and you get a new hash with
+    the same filename. Overwriting would destroy the record of the earlier look."""
+    cfg, path = trained
+    evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl")
+    with pytest.raises(EvalError, match="already"):
+        evaluate_checkpoint(path, ledger_path=tmp_path / "l2.jsonl")
+
+
+def test_an_override_reason_permits_replacing_an_evaluation_record(trained, tmp_path):
+    import json
+
+    cfg, path = trained
+    ledger = tmp_path / "l.jsonl"
+    evaluate_checkpoint(path, ledger_path=ledger)
+    evaluate_checkpoint(path, ledger_path=ledger,
+                        override_reason="session died mid-domain, re-running")
+    record = json.loads(_eval_json(cfg).read_text())
+    assert record["override_reason"] == "session died mid-domain, re-running"

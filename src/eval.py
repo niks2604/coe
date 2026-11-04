@@ -128,6 +128,41 @@ def load_checkpoint(path: str | Path):
 HEADLINE_ROLE = "headline"
 
 
+def eval_results_path(cfg, dry_run: bool) -> Path:
+    """Where this evaluation's record goes.
+
+    A dry run gets its own name. It reads pbc_val only, writes no ledger line and is
+    repeated by design - the smoke test runs one - while a full evaluation of a target
+    domain happens once. Sharing a filename would let a cheap repeatable run overwrite
+    the record of the one look the protocol allows.
+    """
+    suffix = "_eval_dryrun" if dry_run else "_eval"
+    return cfg.paths.results_dir / f"{cfg.run_id}_seed{cfg.seed}{suffix}.json"
+
+
+def _write_eval_results(cfg, out: dict, dry_run: bool,
+                        override_reason: str | None) -> Path:
+    """Write the record, and refuse to destroy one that is already there.
+
+    run_id and seed do not identify a checkpoint: retrain and the new one has a new
+    hash but the same filename. Overwriting would lose what the earlier look found, so
+    it takes the same --override-reason that a repeat look takes. A dry run is exempt,
+    being repeatable by design.
+    """
+    path = eval_results_path(cfg, dry_run)
+    if path.exists() and not dry_run and override_reason is None:
+        raise EvalError(
+            f"{path} already holds an evaluation record for {cfg.run_id} seed "
+            f"{cfg.seed}. Overwriting it would destroy what that look found. Move it "
+            f"aside, or pass --override-reason to record why it is being replaced."
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Set before writing, so the record states where it lives even after it is moved.
+    out["results_json"] = str(path)
+    path.write_text(json.dumps(out, indent=2, default=str) + "\n", encoding="utf-8")
+    return path
+
+
 def _selection_role(checkpoint: Path, payload: dict, override_reason: str | None):
     """Refuse any checkpoint but the one the protocol selected.
 
@@ -395,6 +430,10 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
         **observed,
     }
 
+    # Before any ledger line: an entry saying a domain was looked at, with no record of
+    # what was found, spends the one look the protocol allows and keeps nothing.
+    _write_eval_results(cfg, out, dry_run, override_reason)
+
     if not dry_run:
         for domain in evaluated:
             if not is_ledgered(domain):
@@ -432,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
                               override_reason=args.override_reason)
 
     label = "DRY RUN (pbc_val only)" if out["dry_run"] else "EVALUATION"
+    print(f"  record: {out['results_json']}")
     print(f"{label}  {out['run_id']} seed {out['seed']}  {out['checkpoint_sha256'][:12]}")
     for domain in out["domains"]:
         for mode, scored in out["results"][domain].items():
