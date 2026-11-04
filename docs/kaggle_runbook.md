@@ -182,7 +182,8 @@ full budget was used.
 With `env: kaggle`, `paths.kaggle.results_dir` is `/kaggle/working/results`:
 
 ```
-/kaggle/working/results/<run_id>_seed<seed>/best.pt                  checkpoint
+/kaggle/working/results/<run_id>_seed<seed>/last.pt                  THE checkpoint
+/kaggle/working/results/<run_id>_seed<seed>/best.pt                  informational only
 /kaggle/working/results/<run_id>_seed<seed>/<run_id>_seed<seed>.json results record
 /kaggle/working/coe/target_eval_ledger.jsonl                         the ledger
 ```
@@ -190,11 +191,16 @@ With `env: kaggle`, `paths.kaggle.results_dir` is `/kaggle/working/results`:
 The results JSON embeds the fully resolved config, the git commit and dirty flag, the
 resolved device, per-epoch history with both loss terms separated, and wall-clock time.
 
+Evaluate `last.pt`, never `best.pt`. The checkpoint is the final epoch of the declared
+budget (CLAUDE.md sec 5); `best.pt` records the pbc_val peak the rule discarded and is
+there to be read, not evaluated. A run that fires the divergence guard writes neither
+file and leaves only the results JSON, with `failed: true`.
+
 Evaluation is a separate script and reads the config embedded in the checkpoint, never a
 YAML passed alongside it:
 
 ```bash
-!python -m src.eval --checkpoint /kaggle/working/results/wiring_bottleneck_seed0/best.pt --dry-run
+!python -m src.eval --checkpoint /kaggle/working/results/wiring_bottleneck_seed0/last.pt --dry-run
 ```
 
 `--dry-run` touches `pbc_val` only and writes no ledger entry. Drop it only when you

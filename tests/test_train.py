@@ -11,8 +11,9 @@ pytest.importorskip("torch")
 # --- checkpoint selection ---------------------------------------------------------------
 
 def test_best_epoch_is_the_val_peak_not_the_last():
-    """A val curve that peaks in the middle and then overfits. Taking the last epoch is
-    the easiest way to report a worse gap than the run actually achieved."""
+    """select_best_epoch now feeds best.pt, which is informational only: the headline
+    checkpoint is the final epoch (CLAUDE.md sec 5). The peak still has to be found
+    correctly for the record to be worth keeping."""
     history = [{"epoch": 0, "val_macro_f1": 0.70},
                {"epoch": 1, "val_macro_f1": 0.91},
                {"epoch": 2, "val_macro_f1": 0.88},
@@ -306,23 +307,125 @@ def test_selection_reads_no_monitoring_key():
     assert "monitor" not in inspect.getsource(train_mod.select_best_epoch)
 
 
-# --- early stopping is reported, not inferred -----------------------------------------
 
-def test_result_reports_whether_early_stopping_fired(experiment_config,
-                                                     tiny_raw_loadable, mapping,
-                                                     label_space, tmp_path):
-    """The wiring check declares a maximum epoch count; a run that stopped at 7 of 30
-    must not be read as having used the declared budget."""
+
+# --- the final-epoch rule -------------------------------------------------------------
+
+def test_final_epoch_rule_selects_the_last_epoch_in_history():
+    """Not the peak. pbc_val cannot support an argmax over epochs, and a per-model
+    argmax selected the three models at different points on their own learning curves
+    (CLAUDE.md sec 5)."""
+    from src.config import SelectionCfg
+    from src.train import select_epoch
+
+    history = [{"epoch": 0, "val_macro_f1": 0.97},
+               {"epoch": 1, "val_macro_f1": 0.91},
+               {"epoch": 2, "val_macro_f1": 0.93}]
+    rule = SelectionCfg(rule="final_epoch", report_metric="val_macro_f1",
+                        divergence_guard="non_finite_loss")
+    assert select_epoch(history, rule)["epoch"] == 2
+
+
+def test_the_rule_comes_from_the_config_not_a_module_constant():
+    """Structural: select_epoch must branch on what it is handed, so a config can
+    change the rule without a source edit (CLAUDE.md sec 5)."""
+    import inspect
+
+    from src.config import SelectionCfg
+    from src.train import select_epoch
+
+    source = inspect.getsource(select_epoch)
+    assert "selection.rule" in source or ".rule" in source
+    bad = SelectionCfg(rule="nonsense", report_metric="val_macro_f1",
+                       divergence_guard="non_finite_loss")
+    with pytest.raises(ValueError, match="nonsense"):
+        select_epoch([{"epoch": 0, "val_macro_f1": 0.5}], bad)
+
+
+def test_last_pt_is_written_beside_best_pt(experiment_config, tiny_raw_loadable,
+                                           mapping, label_space, tmp_path):
+    """Only best.pt was written before, so a change of rule meant a retrain."""
     from src.train import train
 
-    cfg = _tiny(experiment_config, **{"train.epochs": 3,
-                                      "train.early_stopping.patience": 1})
+    cfg = _tiny(experiment_config, **{"train.epochs": 2})
     result = train(cfg, mapping, label_space, out_dir=tmp_path)
-    assert isinstance(result["early_stopped"], bool)
-    assert result["epochs_run"] <= cfg.train.epochs
-    if result["early_stopped"]:
-        assert result["epochs_run"] < cfg.train.epochs
-        assert result["stopped_after_epoch"] == result["epochs_run"] - 1
-    else:
-        assert result["epochs_run"] == cfg.train.epochs
-        assert result["stopped_after_epoch"] is None
+    assert (tmp_path / "last.pt").is_file()
+    assert (tmp_path / "best.pt").is_file()
+    assert result["checkpoint"].endswith("last.pt")
+    assert result["informational_checkpoint"].endswith("best.pt")
+
+
+def test_last_pt_holds_the_final_epoch_and_best_pt_the_peak(experiment_config,
+                                                            tiny_raw_loadable, mapping,
+                                                            label_space, tmp_path):
+    import torch
+
+    from src.train import train
+
+    cfg = _tiny(experiment_config, **{"train.epochs": 2})
+    result = train(cfg, mapping, label_space, out_dir=tmp_path)
+    last = torch.load(tmp_path / "last.pt", weights_only=False)
+    best = torch.load(tmp_path / "best.pt", weights_only=False)
+    assert last["selected_epoch"] == result["history"][-1]["epoch"]
+    assert best["selected_epoch"] == select_best_epoch(result["history"])["epoch"]
+
+
+def test_each_checkpoint_records_its_role_and_rule(experiment_config,
+                                                   tiny_raw_loadable, mapping,
+                                                   label_space, tmp_path):
+    """A results JSON and a ledger line must name the file that was actually read."""
+    import torch
+
+    from src.train import train
+
+    cfg = _tiny(experiment_config)
+    train(cfg, mapping, label_space, out_dir=tmp_path)
+    last = torch.load(tmp_path / "last.pt", weights_only=False)
+    best = torch.load(tmp_path / "best.pt", weights_only=False)
+    assert last["selection"]["role"] == "headline"
+    assert last["selection"]["rule"] == "final_epoch"
+    assert best["selection"]["role"] == "informational"
+
+
+# --- the divergence guard -------------------------------------------------------------
+
+def test_divergence_guard_aborts_and_writes_no_headline_checkpoint(
+        experiment_config, tiny_raw_loadable, mapping, label_space, tmp_path,
+        monkeypatch):
+    """A non-finite training loss is a failed run, not a selectable one. The guard reads
+    the training loss and never a validation metric: a guard that stopped on a falling
+    val metric would be epoch selection under another name (CLAUDE.md sec 5)."""
+    import torch
+
+    import src.losses as losses_mod
+    from src.train import DivergenceError, train
+
+    real = losses_mod.compute_loss
+
+    def nan_loss(output, targets, cfg, class_weights=None):
+        total, parts = real(output, targets, cfg, class_weights)
+        return total * float("nan"), parts
+
+    monkeypatch.setattr("src.train.compute_loss", nan_loss)
+    cfg = _tiny(experiment_config, **{"train.epochs": 2})
+    with pytest.raises(DivergenceError):
+        train(cfg, mapping, label_space, out_dir=tmp_path)
+    assert not (tmp_path / "last.pt").exists()
+    assert not (tmp_path / "best.pt").exists()
+    written = list(tmp_path.glob("*.json"))
+    assert written, "a failed run must still leave a record of why it failed"
+    import json
+    record = json.loads(written[0].read_text())
+    assert record["failed"] is True
+    assert "non_finite" in record["failure"]
+
+
+def test_a_clean_run_records_that_it_did_not_diverge(experiment_config,
+                                                     tiny_raw_loadable, mapping,
+                                                     label_space, tmp_path):
+    from src.train import train
+
+    result = train(_tiny(experiment_config), mapping, label_space, out_dir=tmp_path)
+    assert result["failed"] is False
+    assert result["failure"] is None
+    assert result["epochs_run"] == result["config"]["train"]["epochs"]

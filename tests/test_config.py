@@ -24,16 +24,6 @@ def test_canonical_config_loads(experiment_config):
 
 # --- leakage ---------------------------------------------------------------------
 
-def test_early_stopping_on_a_target_split_is_rejected(experiment_config):
-    path = experiment_config(**{"train.early_stopping.split": "raabin_testA"})
-    with pytest.raises(TargetDomainLeakage, match="raabin_testA"):
-        load_config(path)
-
-
-def test_early_stopping_on_raabin_train_is_rejected(experiment_config):
-    path = experiment_config(**{"train.early_stopping.split": "raabin_train"})
-    with pytest.raises(TargetDomainLeakage, match="raabin_train"):
-        load_config(path)
 
 
 def test_abstention_threshold_on_a_target_split_is_rejected(experiment_config):
@@ -49,16 +39,6 @@ def test_a_target_id_anywhere_under_train_is_rejected(experiment_config):
         load_config(path)
 
 
-def test_source_split_is_accepted_for_early_stopping(experiment_config):
-    cfg = load_config(experiment_config(**{"train.early_stopping.split": "pbc_val"}))
-    assert cfg.train.early_stopping["split"] == "pbc_val"
-
-
-def test_pbc_test_is_rejected_for_tuning(experiment_config):
-    """Source, but still not a tuning split: all tuning happens on pbc_val."""
-    path = experiment_config(**{"train.early_stopping.split": "pbc_test"})
-    with pytest.raises(ConfigError, match="pbc_val"):
-        load_config(path)
 
 
 def test_unknown_eval_domain_is_rejected(experiment_config):
@@ -347,8 +327,7 @@ def test_the_three_headline_configs_share_every_protocol_field():
     docs = {n: yaml.safe_load((_configs_dir() / n).read_text())
             for n in ("baseline.yaml", "bottleneck.yaml", "control.yaml")}
     for field in ("optimizer", "lr_schedule", "warmup_epochs", "epochs", "batch_size",
-                  "lr", "weight_decay", "class_weighting", "augmentation",
-                  "early_stopping"):
+                  "lr", "weight_decay", "class_weighting", "augmentation"):
         values = {n: doc["train"][field] for n, doc in docs.items()}
         assert len(set(map(str, values.values()))) == 1, f"train.{field} differs: {values}"
     for field in ("image_size", "normalization", "source", "subset_n_images"):
@@ -522,3 +501,70 @@ def test_the_kaggle_audit_reads_the_same_tree_as_training():
                  "wiring_control.yaml"):
         doc = yaml.safe_load((_configs_dir() / name).read_text())
         assert doc["paths"]["kaggle"] == audit["paths"]["kaggle"], name
+
+
+# --- checkpoint selection ------------------------------------------------------------
+
+def test_selection_defaults_to_the_final_epoch_rule(experiment_config):
+    """Optional in the schema, exactly as device is, so short test configs stay valid.
+    The default is the protocol rule, never the old first-max one."""
+    cfg = load_config(experiment_config(**{"selection": DELETE}))
+    assert cfg.selection.rule == "final_epoch"
+    assert cfg.selection.report_metric == "val_macro_f1"
+    assert cfg.selection.divergence_guard == "non_finite_loss"
+
+
+def test_an_unknown_selection_rule_is_refused(experiment_config):
+    path = experiment_config(**{"selection.rule": "best_val_macro_f1"})
+    with pytest.raises(ConfigError, match="selection.rule"):
+        load_config(path)
+
+
+def test_an_unknown_divergence_guard_is_refused(experiment_config):
+    path = experiment_config(**{"selection.divergence_guard": "val_macro_f1_drop"})
+    with pytest.raises(ConfigError, match="divergence_guard"):
+        load_config(path)
+
+
+def test_the_report_metric_may_not_be_a_target_quantity(experiment_config):
+    """A guard that read a target metric would be checkpoint selection on target
+    information (CLAUDE.md sec 3)."""
+    path = experiment_config(**{"selection.report_metric": "raabin_testA_macro_f1"})
+    with pytest.raises(ConfigError, match="report_metric"):
+        load_config(path)
+
+
+def test_a_target_id_anywhere_under_selection_is_rejected(experiment_config):
+    """Catches leakage through selection fields that do not exist yet."""
+    path = experiment_config(**{"selection.rule": "raabin_testA"})
+    with pytest.raises(TargetDomainLeakage, match="raabin_testA"):
+        load_config(path)
+
+
+def test_the_resolved_config_records_the_selection_block(experiment_config):
+    """A checkpoint embeds the resolved config, so the rule that produced it must be
+    readable from the checkpoint alone."""
+    cfg = load_config(experiment_config())
+    assert cfg.resolved["selection"]["rule"] == "final_epoch"
+
+
+@pytest.mark.parametrize("name", sorted(EXPERIMENT_YAMLS))
+def test_every_experiment_yaml_declares_a_selection_block(name):
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert "selection" in doc, f"{name} does not declare how its checkpoint is chosen"
+    assert doc["selection"]["rule"] == "final_epoch", name
+
+
+@pytest.mark.parametrize("name", sorted(EXPERIMENT_YAMLS))
+def test_no_experiment_yaml_still_declares_early_stopping(name):
+    """Patience-based early stopping is removed. A config that still declared it would
+    record a setting with no effect (CLAUDE.md sec 5)."""
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert "early_stopping" not in doc["train"], name
+
+
+def test_the_three_headline_configs_share_their_selection_block():
+    docs = {n: yaml.safe_load((_configs_dir() / n).read_text())
+            for n in ("baseline.yaml", "bottleneck.yaml", "control.yaml")}
+    values = {n: doc["selection"] for n, doc in docs.items()}
+    assert len(set(map(str, values.values()))) == 1, values

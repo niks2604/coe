@@ -83,10 +83,6 @@ train:
       saturation: 0.1
       hue: 0.02
 
-  early_stopping:
-    metric: macro_f1
-    patience: 5
-    split: pbc_val            # the only split any tuning decision may read
 
 eval:
   # Three separate Raabin domains; no pooled Raabin headline number.
@@ -106,3 +102,13 @@ bootstrap:
   ci: 0.95
   stratify_by: class
   resample_domains_independently: true
+
+selection:
+  # The evaluated checkpoint is the final epoch of the declared budget. pbc_val cannot
+  # support an argmax over epochs, and a per-model argmax selected the three models at
+  # different points on their own learning curves (CLAUDE.md sec 5).
+  rule: final_epoch
+  report_metric: val_macro_f1   # recorded per epoch; selects nothing
+  # Reads the TRAINING loss. A guard on a falling val metric would be epoch selection
+  # under another name. A run that fires it yields no checkpoint at all.
+  divergence_guard: non_finite_loss

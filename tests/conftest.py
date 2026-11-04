@@ -258,8 +258,9 @@ def experiment_dict(raw: Path, mapping: Path, **overrides) -> dict:
                 "color_jitter": {"brightness": 0.1, "contrast": 0.1,
                                  "saturation": 0.1, "hue": 0.02},
             },
-            "early_stopping": {"metric": "macro_f1", "patience": 5, "split": "pbc_val"},
         },
+        "selection": {"rule": "final_epoch", "report_metric": "val_macro_f1",
+                      "divergence_guard": "non_finite_loss"},
         "eval": {
             "domains": ["pbc_test", "raabin_train", "raabin_testA", "raabin_testB", "lisc"],
             "attribute_modes": ["soft", "hard"],

@@ -66,7 +66,7 @@ def test_smoke_run_is_seed_reproducible(experiment_config, tiny_raw_loadable,
                                                "train.epochs": 1,
                                                "train.batch_size": 2}))
         train(cfg, mapping, label_space, out_dir=out)
-        payload = torch.load(out / "best.pt", weights_only=False)
+        payload = torch.load(out / "last.pt", weights_only=False)
         return payload["state_dict"]["classifier.weight"]
 
     a = final_weights(0, tmp_path / "a")
@@ -85,7 +85,7 @@ def test_different_seeds_give_different_weights(experiment_config, tiny_raw_load
                                                "train.epochs": 1,
                                                "train.batch_size": 2}))
         train(cfg, mapping, label_space, out_dir=out)
-        return torch.load(out / "best.pt", weights_only=False)["state_dict"]["classifier.weight"]
+        return torch.load(out / "last.pt", weights_only=False)["state_dict"]["classifier.weight"]
 
     assert not torch.allclose(final_weights(0, tmp_path / "a"),
                               final_weights(1, tmp_path / "b"))

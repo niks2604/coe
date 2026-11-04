@@ -4,9 +4,11 @@ This module can only reach pbc_train and pbc_val. It imports the two pinned load
 factories and never the evaluation one, so no out-of-domain data is constructible from
 here at all - which is checked structurally by a test, not just by reading.
 
-Checkpoint selection is the best pbc_val macro-F1, never the last epoch. Macro-F1 and
-not accuracy: CLAUDE.md sec 6 rules accuracy out as a summary, and with basophil at
-about 12% of pbc_train a majority-leaning model can look fine on accuracy.
+The evaluated checkpoint is the final epoch of the declared budget: pbc_val cannot
+support an argmax over 30 epochs, and a per-model argmax selected the three models at
+different points on their own learning curves, which is a protocol difference
+correlated with the representation (CLAUDE.md sec 5). best.pt is still written beside
+last.pt, informational only, so the discarded alternative stays visible.
 """
 from __future__ import annotations
 
@@ -30,17 +32,37 @@ from src.metrics import macro_f1_present, per_attribute_accuracy
 SELECTION_METRIC = "val_macro_f1"
 
 
+class DivergenceError(RuntimeError):
+    """A non-finite training loss. The run failed; it did not produce a result."""
+
+
 # --- selection and checkpoints ---------------------------------------------------------
 
 def select_best_epoch(history: list[dict]) -> dict:
     """Highest val macro-F1; ties go to the earlier epoch.
 
-    Taking the last epoch instead is the easiest way to report a worse result than the
-    run actually achieved, since val macro-F1 usually peaks and then declines.
+    This no longer picks the evaluated checkpoint - select_epoch does. It picks what
+    goes in best.pt, which is informational: recording the peak keeps the alternative
+    the final-epoch rule discarded visible in the results JSON.
     """
     if not history:
         raise ValueError("cannot select a best epoch from an empty history")
     return min(history, key=lambda row: (-float(row[SELECTION_METRIC]), row["epoch"]))
+
+
+def select_epoch(history: list[dict], selection) -> dict:
+    """The evaluated checkpoint, by the rule the config declares.
+
+    Dispatches on selection.rule rather than hardcoding one, so the rule is a config
+    field and not a constant in this module (CLAUDE.md sec 5). An unknown rule raises:
+    there is no fallback, because a silent fallback would be an undeclared protocol.
+    """
+    if not history:
+        raise ValueError("cannot select an epoch from an empty history")
+    if selection.rule == "final_epoch":
+        return history[-1]
+    raise ValueError(
+        f"unknown selection.rule {selection.rule!r}; known: ['final_epoch']")
 
 
 def config_sha256(resolved: dict) -> str:
@@ -49,7 +71,8 @@ def config_sha256(resolved: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def checkpoint_payload(cfg, state_dict, history: list[dict], group_offsets) -> dict:
+def checkpoint_payload(cfg, state_dict, history: list[dict], group_offsets,
+                       role: str = "headline") -> dict:
     """Everything needed to evaluate this checkpoint without any other file.
 
     The resolved config is embedded so evaluation reads it from here rather than from a
@@ -57,7 +80,8 @@ def checkpoint_payload(cfg, state_dict, history: list[dict], group_offsets) -> d
     preprocessing it was not trained with (CLAUDE.md sec 5). group_offsets is embedded
     so the 31 classifier inputs stay interpretable as (column, value) pairs.
     """
-    best = select_best_epoch(history)
+    chosen = (select_epoch(history, cfg.selection) if role == "headline"
+              else select_best_epoch(history))
     meta = run_metadata(device=cfg.device)
     return {
         "state_dict": state_dict,
@@ -67,13 +91,17 @@ def checkpoint_payload(cfg, state_dict, history: list[dict], group_offsets) -> d
         "environment": {k: v for k, v in meta.items() if k != "git"},
         "group_offsets": group_offsets,
         "history": history,
-        "selected_epoch": best["epoch"],
-        SELECTION_METRIC: float(best[SELECTION_METRIC]),
+        "selected_epoch": chosen["epoch"],
+        SELECTION_METRIC: float(chosen[SELECTION_METRIC]),
+        # Which file this is, so a results JSON and a ledger line always name the
+        # checkpoint that was actually read (CLAUDE.md sec 5).
+        "selection": {"rule": cfg.selection.rule, "role": role,
+                      "report_metric": cfg.selection.report_metric},
     }
 
 
 def save_checkpoint(path: Path, cfg, mapping, label_space, history: list[dict],
-                    state_dict=None, group_offsets=None) -> dict:
+                    state_dict=None, group_offsets=None, role: str = "headline") -> dict:
     """Write a checkpoint. Builds the model to obtain real parameter names if no state
     dict is supplied."""
     from src.models.build import build_model
@@ -85,7 +113,7 @@ def save_checkpoint(path: Path, cfg, mapping, label_space, history: list[dict],
         state_dict = model.state_dict() if state_dict is None else state_dict
         group_offsets = getattr(model, "group_offsets", []) if group_offsets is None \
             else group_offsets
-    payload = checkpoint_payload(cfg, state_dict, history, group_offsets)
+    payload = checkpoint_payload(cfg, state_dict, history, group_offsets, role)
     torch.save(payload, path)
     return payload
 
@@ -196,9 +224,7 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
     seconds_per_epoch: list[float] = []
     best_state: dict | None = None
     best_metric = -math.inf
-    patience = cfg.train.early_stopping["patience"]
-    since_improved = 0
-    early_stopped = False
+    diverged_at: int | None = None
 
     for epoch in range(cfg.train.epochs):
         epoch_started = time.time()
@@ -218,6 +244,14 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
             batch_losses.append(float(total))
             batch_class_losses.append(float(parts["class"]))
             batch_attribute_losses.append(float(parts["attribute"]))
+            # The guard, and the only thing that stops a run early. It reads the
+            # TRAINING loss: stopping on a falling validation metric would be epoch
+            # selection under another name (CLAUDE.md sec 5).
+            if not math.isfinite(batch_losses[-1]):
+                diverged_at = epoch
+                break
+        if diverged_at is not None:
+            break
         schedule.step()
 
         row = {"epoch": epoch,
@@ -234,44 +268,59 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
         if row[SELECTION_METRIC] > best_metric:
             best_metric = row[SELECTION_METRIC]
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
-            since_improved = 0
-        else:
-            since_improved += 1
-            if since_improved >= patience:
-                early_stopped = True
-                break
-
-    payload = checkpoint_payload(cfg, best_state or model.state_dict(), history,
-                                 getattr(model, "group_offsets", []))
-    torch.save(payload, out_dir / "best.pt")
 
     meta = run_metadata(device=cfg.device)
+    group_offsets = getattr(model, "group_offsets", [])
+    failure = (None if diverged_at is None
+               else f"non_finite_loss at epoch {diverged_at}")
+
+    if diverged_at is None:
+        # last.pt is the headline: the final epoch of the declared budget. best.pt is
+        # informational, so the alternative the rule discarded stays inspectable.
+        payload = checkpoint_payload(cfg, model.state_dict(), history, group_offsets,
+                                     role="headline")
+        torch.save(payload, out_dir / "last.pt")
+        torch.save(checkpoint_payload(cfg, best_state or model.state_dict(), history,
+                                      group_offsets, role="informational"),
+                   out_dir / "best.pt")
+    else:
+        # A failed run yields no checkpoint at all - neither file, so nothing can be
+        # evaluated by mistake - but it still leaves a record of why it failed.
+        payload = None
     result = {
         "run_id": cfg.run_id,
         "seed": cfg.seed,
         "config": cfg.resolved,
-        "config_sha256": payload["config_sha256"],
+        "config_sha256": (payload["config_sha256"] if payload
+                          else config_sha256(cfg.resolved)),
         "git": meta["git"],
         "hardware": {k: v for k, v in meta.items() if k != "git"},
         "seeding": seeding,
         "weight_load_report": model.weight_load_report,
         "class_weights": None if class_weights is None else class_weights.tolist(),
         "history": history,
-        "selected_epoch": payload["selected_epoch"],
-        SELECTION_METRIC: payload[SELECTION_METRIC],
+        "selection": cfg.resolved["selection"],
+        "selected_epoch": payload["selected_epoch"] if payload else None,
+        SELECTION_METRIC: payload[SELECTION_METRIC] if payload else None,
         "n_train": len(train_loader.dataset),
         "n_val": len(val_loader.dataset),
         "epochs_run": len(history),
-        # A run that stopped at 7 of 30 must not read as having used the declared
-        # budget, so this is recorded rather than inferred from epochs_run.
-        "early_stopped": early_stopped,
-        "stopped_after_epoch": (history[-1]["epoch"] if early_stopped else None),
+        # Recorded rather than inferred from epochs_run: a run that aborted at 7 of 30
+        # must not read as having used the declared budget.
+        "failed": diverged_at is not None,
+        "failure": failure,
         "seconds_per_epoch": seconds_per_epoch,
         "wall_clock_seconds": time.time() - started,
-        "checkpoint": str(out_dir / "best.pt"),
+        "checkpoint": None if payload is None else str(out_dir / "last.pt"),
+        "informational_checkpoint": (None if payload is None
+                                     else str(out_dir / "best.pt")),
     }
     (out_dir / f"{cfg.run_id}_seed{cfg.seed}.json").write_text(
         json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
+    if diverged_at is not None:
+        raise DivergenceError(
+            f"{cfg.run_id} seed {cfg.seed}: {failure}. No checkpoint was written; the "
+            f"record is at {out_dir / f'{cfg.run_id}_seed{cfg.seed}.json'}")
     return result
 
 
@@ -286,9 +335,10 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = cfg.paths.results_dir / f"{cfg.run_id}_seed{cfg.seed}"
 
     result = train(cfg, mapping, label_space, out_dir)
-    print(f"{cfg.run_id} seed {cfg.seed}: "
-          f"best {SELECTION_METRIC} {result[SELECTION_METRIC]:.4f} at epoch "
-          f"{result['selected_epoch']} of {result['epochs_run']}")
+    print(f"{cfg.run_id} seed {cfg.seed}: {SELECTION_METRIC} "
+          f"{result[SELECTION_METRIC]:.4f} at the final epoch "
+          f"{result['selected_epoch']} of {result['epochs_run']} "
+          f"(rule: {cfg.selection.rule})")
     for i, seconds in enumerate(result["seconds_per_epoch"]):
         print(f"  epoch {i}: {seconds:.1f}s")
     print(f"  wall clock {result['wall_clock_seconds']:.1f}s -> {result['checkpoint']}")

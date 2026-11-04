@@ -101,7 +101,7 @@ does not record.
 
 ```bash
 python -m src.train --config configs/<name>.yaml      # train
-python -m src.eval  --checkpoint results/<run>/best.pt  # evaluate
+python -m src.eval  --checkpoint results/<run>/last.pt  # evaluate
 ```
 
 Evaluation reads the resolved config embedded in the checkpoint, never a YAML passed
@@ -115,7 +115,7 @@ single-seed tuning trials.
 
 ```bash
 python -m src.train --config configs/smoke.yaml
-python -m src.eval  --checkpoint results/smoke_seed0/best.pt --dry-run
+python -m src.eval  --checkpoint results/smoke_seed0/last.pt --dry-run
 ```
 
 Note that a smoke run is only 64 optimiser steps and can show that the pipeline runs and

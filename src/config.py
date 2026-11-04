@@ -163,7 +163,22 @@ class TrainCfg:
     augmentation: dict
     lr_schedule: str
     warmup_epochs: int
-    early_stopping: dict
+
+
+@dataclass(frozen=True)
+class SelectionCfg:
+    """How the evaluated checkpoint is chosen, and what aborts a run.
+
+    Declared per config rather than fixed in src/train.py, because no behaviour may
+    depend on something the config does not record (CLAUDE.md sec 5).
+    """
+    rule: str
+    report_metric: str
+    divergence_guard: str
+
+
+DEFAULT_SELECTION = SelectionCfg(rule="final_epoch", report_metric="val_macro_f1",
+                                 divergence_guard="non_finite_loss")
 
 
 @dataclass(frozen=True)
@@ -254,6 +269,7 @@ class Config:
     resolved: dict
     bottleneck: BottleneckCfg | None = None
     device: str = DEFAULT_DEVICE
+    selection: SelectionCfg = DEFAULT_SELECTION
 
 
 # --- shared sections --------------------------------------------------------------------
@@ -344,17 +360,16 @@ def load_audit_config(path: str | Path) -> AuditConfig:
 # --- experiment config ----------------------------------------------------------------------
 
 EXP_TOP = {"run_id", "env", "seed", "paths", "data", "model", "bottleneck",
-           "train", "eval", "bootstrap", "device"}
+           "train", "eval", "bootstrap", "device", "selection"}
 # device is optional in the schema so short test configs stay valid, exactly as
 # lr_schedule and warmup_epochs are; a test requires it of every committed experiment.
-EXP_REQUIRED = EXP_TOP - {"bottleneck", "device"}
+EXP_REQUIRED = EXP_TOP - {"bottleneck", "device", "selection"}
 
 DATA_KEYS = {"class_mapping", "label_space", "source", "image_size",
              "subset_n_images", "normalization"}
 MODEL_KEYS = {"type", "backbone", "backbone_norm", "imagenet_weights"}
 TRAIN_KEYS = {"epochs", "batch_size", "lr", "optimizer", "weight_decay",
-              "class_weighting", "augmentation", "lr_schedule", "warmup_epochs",
-              "early_stopping"}
+              "class_weighting", "augmentation", "lr_schedule", "warmup_epochs"}
 # The schedule is protocol, not a hyperparameter: AdamW with a cosine decay and a short
 # linear warmup, identical across the three models and never tuned (CLAUDE.md sec 5).
 # Both fields are optional so the effective value is always recorded in the resolved
@@ -372,7 +387,14 @@ JITTER_KEYS = {"brightness", "contrast", "saturation", "hue"}
 # strength is the one augmentation knob that cannot be tuned without effectively tuning
 # on the target. It is capped here and fixed a priori (CLAUDE.md sec 3).
 JITTER_CAPS = {"brightness": 0.2, "contrast": 0.2, "saturation": 0.2, "hue": 0.05}
-EARLY_STOP_KEYS = {"metric", "patience", "split"}
+SELECTION_KEYS = {"rule", "report_metric", "divergence_guard"}
+# One rule, declared: the final epoch of the budget. The old first-max rule is gone
+# rather than configurable, because leaving it selectable leaves it reachable.
+SELECTION_RULES = ("final_epoch",)
+# The guard reads the TRAINING loss. A guard that stopped on a falling validation
+# metric would be epoch selection under another name (CLAUDE.md sec 5).
+DIVERGENCE_GUARDS = ("non_finite_loss",)
+REPORT_METRICS = ("val_macro_f1",)
 EVAL_KEYS = {"domains", "attribute_modes", "secondary_subsets", "abstention",
              "ece_bins", "macro_f1_over"}
 EVAL_REQUIRED = EVAL_KEYS - {"attribute_modes"}
@@ -579,28 +601,6 @@ def _build_train(doc: dict) -> TrainCfg:
         "color_jitter": jitter,
     }
 
-    es = _check_keys(node["early_stopping"], EARLY_STOP_KEYS, EARLY_STOP_KEYS,
-                     "train.early_stopping")
-    split = es["split"]
-    if split not in DATASETS:
-        raise ConfigError(
-            f"train.early_stopping.split: unknown dataset id {split!r}; "
-            f"known: {sorted(DATASETS)}"
-        )
-    if domain_of(split) is Domain.TARGET:
-        raise TargetDomainLeakage(
-            f"train.early_stopping.split: {split!r} is TARGET data. Early stopping on "
-            f"a target domain is model selection using target information "
-            f"(CLAUDE.md sec 3)."
-        )
-    if split != TUNING_SPLIT:
-        raise ConfigError(
-            f"train.early_stopping.split: {split!r} may not drive model selection; use "
-            f"{TUNING_SPLIT!r}. pbc_test is held out for the source-domain report."
-        )
-    if not isinstance(es["patience"], int) or es["patience"] < 1:
-        raise ConfigError("train.early_stopping.patience: expected a positive int")
-
     return TrainCfg(
         epochs=node["epochs"],
         batch_size=node["batch_size"],
@@ -611,8 +611,47 @@ def _build_train(doc: dict) -> TrainCfg:
         augmentation=augmentation,
         lr_schedule=schedule,
         warmup_epochs=warmup,
-        early_stopping=dict(es),
     )
+
+
+def _build_selection(doc: dict) -> SelectionCfg:
+    """The checkpoint rule and the divergence guard.
+
+    Optional in the schema, exactly as device is, so short test configs stay valid; a
+    test requires it of every committed experiment YAML. The default is the protocol
+    rule, so an omission cannot resurrect the old first-max behaviour.
+    """
+    node = doc.get("selection")
+    if node is None:
+        return DEFAULT_SELECTION
+    node = _check_keys(node, SELECTION_KEYS, SELECTION_KEYS, "selection")
+
+    for value in _iter_strings(node):
+        if value in DATASETS and domain_of(value) is Domain.TARGET:
+            raise TargetDomainLeakage(
+                f"selection: references target dataset {value!r}. Checkpoint selection "
+                f"must not read target information (CLAUDE.md sec 3)."
+            )
+
+    if node["rule"] not in SELECTION_RULES:
+        raise ConfigError(
+            f"selection.rule: {node['rule']!r} is not one of {list(SELECTION_RULES)}. "
+            f"The checkpoint is the final epoch of the declared budget "
+            f"(CLAUDE.md sec 5)."
+        )
+    if node["report_metric"] not in REPORT_METRICS:
+        raise ConfigError(
+            f"selection.report_metric: {node['report_metric']!r} is not one of "
+            f"{list(REPORT_METRICS)}. It is recorded per epoch and selects nothing; a "
+            f"target-domain quantity here would be leakage."
+        )
+    if node["divergence_guard"] not in DIVERGENCE_GUARDS:
+        raise ConfigError(
+            f"selection.divergence_guard: {node['divergence_guard']!r} is not one of "
+            f"{list(DIVERGENCE_GUARDS)}. The guard reads the training loss only."
+        )
+    return SelectionCfg(rule=node["rule"], report_metric=node["report_metric"],
+                        divergence_guard=node["divergence_guard"])
 
 
 def _build_eval(doc: dict, model_type: str, mapping: ClassMapping) -> EvalCfg:
@@ -748,6 +787,7 @@ def load_config(path: str | Path) -> Config:
     eval_cfg = _build_eval(doc, model.type, data.class_mapping)
     bootstrap = _build_bootstrap(doc)
     device = _build_device(doc)
+    selection = _build_selection(doc)
 
     resolved = {
         "run_id": doc["run_id"],
@@ -768,7 +808,11 @@ def load_config(path: str | Path) -> Config:
             "augmentation": train.augmentation,
             "lr_schedule": train.lr_schedule,
             "warmup_epochs": train.warmup_epochs,
-            "early_stopping": train.early_stopping,
+        },
+        "selection": {
+            "rule": selection.rule,
+            "report_metric": selection.report_metric,
+            "divergence_guard": selection.divergence_guard,
         },
         "eval": {
             "domains": eval_cfg.domains,
@@ -788,7 +832,7 @@ def load_config(path: str | Path) -> Config:
     return Config(
         run_id=doc["run_id"], env=env, seed=seed, paths=paths, data=data, model=model,
         train=train, eval=eval_cfg, bootstrap=bootstrap, bottleneck=bottleneck,
-        device=device, resolved=resolved,
+        device=device, selection=selection, resolved=resolved,
     )
 
 
