@@ -125,6 +125,48 @@ def load_checkpoint(path: str | Path):
     return cfg, mapping, label_space, model, payload
 
 
+HEADLINE_ROLE = "headline"
+
+
+def _selection_role(checkpoint: Path, payload: dict, override_reason: str | None):
+    """Refuse any checkpoint but the one the protocol selected.
+
+    last.pt carries role "headline"; best.pt carries "informational" and is the pbc_val
+    peak the final-epoch rule discarded, there to be read and not evaluated (CLAUDE.md
+    sec 5). A checkpoint saved before the role was recorded was selected by the old
+    first-max rule, so it is non-headline by definition and is refused the same way.
+
+    The gate is here and not in load_checkpoint, which stays able to open anything so a
+    checkpoint can still be inspected - the same split as resolve_device.
+
+    Returns (recorded_role, needs_override): the role for the record, and whether the
+    override was spent on this rather than on a prior ledger entry.
+    """
+    selection = payload.get("selection")
+    if selection is None:
+        if override_reason is None:
+            raise EvalError(
+                f"{checkpoint} records no selection role. It predates the final-epoch "
+                f"rule, so it was chosen by the old best-pbc_val-epoch rule and is not "
+                f"the checkpoint the protocol selects. Evaluate last.pt from a current "
+                f"run, or pass --override-reason to record why this one."
+            )
+        return None, True
+
+    role = selection.get("role")
+    if role == HEADLINE_ROLE:
+        return role, False
+    if override_reason is None:
+        raise EvalError(
+            f"{checkpoint} is a {role!r} checkpoint, not the headline one. The "
+            f"evaluated checkpoint is the final epoch of the declared budget "
+            f"(last.pt); best.pt records the pbc_val peak the rule discarded and is "
+            f"never evaluated (CLAUDE.md sec 5). Pass --override-reason to record why "
+            f"you are evaluating it anyway."
+        )
+    return role, True
+
+
 def _buffer_hash(model) -> str:
     """Hash of every buffer, so a running-statistic update cannot go unnoticed."""
     digest = hashlib.sha256()
@@ -211,6 +253,10 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
     started = time.time()
     checkpoint = Path(checkpoint)
     cfg, mapping, label_space, model, payload = load_checkpoint(checkpoint)
+    # Applies on a dry run too: it spends no ledger entry, but it still produces a
+    # number someone may quote.
+    selection_role, override_spent_on_role = _selection_role(
+        checkpoint, payload, override_reason)
     # Resolved here rather than in load_checkpoint, which stays hardware-independent so
     # a checkpoint can be inspected anywhere; this raises if the device is unavailable.
     device = resolve_device(cfg)
@@ -230,11 +276,14 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
         # configured-but-absent domain reject an otherwise legitimate override.
         priors = {domain: bool(find_entries(ledger_path, sha, domain))
                   for domain in domains if is_ledgered(domain)}
-        if override_reason is not None and not any(priors.values()):
+        # An override now has two legitimate justifications: a prior ledger entry, or
+        # a non-headline checkpoint. With neither, it is still a mistake.
+        if (override_reason is not None and not any(priors.values())
+                and not override_spent_on_role):
             raise LedgerError(
-                f"--override-reason was given but none of the ledgered domains "
-                f"{sorted(priors)} has a prior evaluation of this checkpoint to "
-                f"override. Remove the flag."
+                f"--override-reason was given but this is a headline checkpoint and "
+                f"none of the ledgered domains {sorted(priors)} has a prior evaluation "
+                f"of it to override. Remove the flag."
             )
         for domain in domains:
             assert_not_evaluated(ledger_path, sha, domain,
@@ -329,6 +378,8 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
         "hardware": {k: v for k, v in meta.items() if k != "git"},
         "dry_run": dry_run,
         "override_reason": override_reason,
+        "selection_role": selection_role,
+        "selection_rule": (payload.get("selection") or {}).get("rule"),
         "attribute_modes": modes,
         "domains": evaluated,
         "skipped_domains": skipped,
@@ -349,7 +400,11 @@ def evaluate_checkpoint(checkpoint: str | Path, ledger_path: str | Path = LEDGER
                 continue
             entry = {"checkpoint_sha256": sha, "domain": domain, "run_id": cfg.run_id,
                      "seed": cfg.seed, "config_sha256": payload.get("config_sha256"),
-                     "selected_epoch": payload.get("selected_epoch")}
+                     "selected_epoch": payload.get("selected_epoch"),
+                     # Recorded on every entry, headline or not: absence must not be
+                     # the only way to tell a headline look from a legacy one.
+                     "selection_role": selection_role,
+                     "selection_rule": (payload.get("selection") or {}).get("rule")}
             if override_reason is not None:
                 entry["override_reason"] = override_reason
             append_entry(ledger_path, entry)
@@ -364,7 +419,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="evaluate pbc_val only; writes no ledger entry")
     parser.add_argument("--override-reason", default=None,
-                        help="re-evaluate a ledgered domain; recorded in the ledger")
+                        help="re-evaluate a ledgered domain, or evaluate a checkpoint "
+                             "that is not the headline one; recorded in the ledger")
     args = parser.parse_args(argv)
 
     if args.override_reason is not None and not args.override_reason.strip():

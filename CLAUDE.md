@@ -70,7 +70,7 @@ Configs. Every experiment is fully specified by one YAML file in configs/. No hy
 
 Two blessed exceptions to the no-behavioural-flags rule, each of which records itself:
 
-src/eval.py --override-reason "<text>": re-evaluates a checkpoint/domain pair the ledger has already seen. The reason is mandatory, non-empty, and written into the ledger.
+src/eval.py --override-reason "<text>": permits one of two things the protocol otherwise refuses — re-evaluating a checkpoint/domain pair the ledger has already seen, or evaluating a checkpoint that is not the headline one. The reason is mandatory, non-empty, and written into the ledger. With neither condition present it is itself an error, so the flag cannot be left on out of habit.
 src/eval.py --dry-run: evaluates pbc_val only, touches no held-out or target domain, and writes no ledger entry. Recorded in the results JSON. Used by the smoke test.
 
 Seeding. Seed Python, NumPy, and PyTorch. Set deterministic cuDNN. The seed lives in the config. Every reported number is the mean ± std over 3 seeds unless explicitly stated otherwise.
@@ -84,7 +84,7 @@ wall-clock time and hardware
 
 Reproducibility bar. A training script is done when python -m src.train --config configs/<x>.yaml reproduces the run from scratch with no other arguments, no manual steps, and no edits to source files. Evaluation is a separate script: python -m src.eval --checkpoint <path>. It reads the resolved config embedded in the checkpoint, never a YAML passed alongside it, so a checkpoint cannot be evaluated under preprocessing it was not trained with.
 
-Target evaluation ledger. target_eval_ledger.jsonl at the repo root, append-only, and committed to git. One line per (checkpoint sha256, domain), recording timestamp, run_id, config sha256, git commit and dirty flag, and the override reason where one was used. A second evaluation of the same pair is refused unless --override-reason is given. pbc_test is ledgered too: it is held out for the source-domain report, so repeated looks at it are the same error as repeated looks at a target.
+Target evaluation ledger. target_eval_ledger.jsonl at the repo root, append-only, and committed to git. One line per (checkpoint sha256, domain), recording timestamp, run_id, config sha256, git commit and dirty flag, the selection role and rule of the checkpoint that was read, and the override reason where one was used. src/eval.py refuses any checkpoint whose recorded role is not headline — best.pt, or anything saved before the role was recorded — unless an override reason is given. A second evaluation of the same pair is refused unless --override-reason is given. pbc_test is ledgered too: it is held out for the source-domain report, so repeated looks at it are the same error as repeated looks at a target.
 
 Repeated target evaluation is tuning on the target — look enough times and keep the best, and this protocol is void. The ledger keys on the checkpoint hash, so three seeds give three legitimate entries, and retraining yields a new hash. It is therefore an audit trail that makes repeat looks visible in git history, not a guarantee. Anyone reading a result should read the ledger.
 

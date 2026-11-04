@@ -275,4 +275,5 @@ is unrecoverable.
 | `ConfigError: device: mps is for smoke and debug configs only` | An `mps` device on a wiring or headline config | Use `cuda` on Kaggle |
 | `WeightsUnavailableError` | No internet and no local weights | Attach weights and set `imagenet_weights` (sec 5) |
 | `LedgerError: ... already evaluated` | This checkpoint/domain pair was looked at before | Intended. Do not add `--override-reason` unless the repeat look is deliberate and justified |
+| `EvalError: ... is a 'informational' checkpoint` | You pointed `src.eval` at `best.pt` | Evaluate `last.pt`. Override only to look at the discarded peak deliberately |
 | Results written somewhere unexpected | `env` is still `local` | Set `env: kaggle` (sec 0) |

@@ -110,7 +110,9 @@ Evaluation reads the resolved config embedded in the checkpoint, never a YAML pa
 alongside it, so a checkpoint cannot be evaluated under preprocessing it was not trained
 with. There are exactly two blessed flags, each of which records itself: `--dry-run`
 (evaluates `pbc_val` only, writes no ledger entry) and `--override-reason "<text>"`
-(re-evaluates a ledgered pair, reason mandatory and written to the ledger).
+(re-evaluates a ledgered pair, or evaluates a checkpoint that is not the headline one;
+reason mandatory and written to the ledger). Evaluation refuses `best.pt` without it:
+the evaluated checkpoint is `last.pt`, the final epoch of the declared budget.
 
 **Start with the smoke test**, which runs locally on CPU:
 

@@ -16,7 +16,7 @@ def trained(experiment_config, tiny_raw_loadable, mapping, label_space, tmp_path
     cfg = load_config(experiment_config(**{"data.image_size": 32,
                                            "train.batch_size": 2,
                                            "train.epochs": 1}))
-    path = tmp_path / "best.pt"
+    path = tmp_path / "last.pt"
     save_checkpoint(path, cfg, mapping, label_space,
                     history=[{"epoch": 0, "val_macro_f1": 0.5}])
     return cfg, path
@@ -259,3 +259,126 @@ def test_score_reports_mean_max_probability_next_to_ece(trained):
     scored = _score(cfg, predictions, classes, None)
     assert scored["mean_max_probability"] == pytest.approx(0.8)
     assert "ece" in scored
+
+
+# --- only the headline checkpoint may be evaluated ------------------------------------
+
+@pytest.fixture
+def informational(experiment_config, tiny_raw_loadable, mapping, label_space, tmp_path):
+    """best.pt: the pbc_val peak the final-epoch rule discarded."""
+    from src.config import load_config
+    from src.train import save_checkpoint
+
+    cfg = load_config(experiment_config(**{"data.image_size": 32,
+                                           "train.batch_size": 2,
+                                           "train.epochs": 1}))
+    path = tmp_path / "best.pt"
+    save_checkpoint(path, cfg, mapping, label_space,
+                    history=[{"epoch": 0, "val_macro_f1": 0.5}],
+                    role="informational")
+    return cfg, path
+
+
+@pytest.fixture
+def legacy(trained, tmp_path):
+    """A checkpoint from before the role was recorded. It was selected by the old
+    first-max rule, so it is a non-headline checkpoint by definition."""
+    import torch
+
+    _, path = trained
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload.pop("selection")
+    out = tmp_path / "legacy.pt"
+    torch.save(payload, out)
+    return out
+
+
+def test_an_informational_checkpoint_is_refused(informational, tmp_path):
+    """best.pt is never the evaluated checkpoint (CLAUDE.md sec 5). Evaluating it would
+    spend a ledger entry on a checkpoint the protocol did not select."""
+    _, path = informational
+    with pytest.raises(EvalError, match="informational"):
+        evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl")
+
+
+def test_an_informational_checkpoint_is_refused_on_a_dry_run_too(informational,
+                                                                 tmp_path):
+    """A dry run spends no ledger entry, but it still produces a number someone may
+    quote. The refusal is about which checkpoint is the protocol's."""
+    _, path = informational
+    with pytest.raises(EvalError, match="informational"):
+        evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl", dry_run=True)
+
+
+def test_a_legacy_checkpoint_with_no_recorded_role_is_refused(legacy, tmp_path):
+    with pytest.raises(EvalError, match="role"):
+        evaluate_checkpoint(legacy, ledger_path=tmp_path / "l.jsonl")
+
+
+def test_the_headline_checkpoint_needs_no_override(trained, tmp_path):
+    _, path = trained
+    out = evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl", dry_run=True)
+    assert out["selection_role"] == "headline"
+    assert out["override_reason"] is None
+
+
+def test_an_override_reason_admits_an_informational_checkpoint(informational, tmp_path):
+    _, path = informational
+    out = evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl", dry_run=True,
+                              override_reason="comparing the discarded pbc_val peak")
+    assert out["selection_role"] == "informational"
+    assert out["override_reason"] == "comparing the discarded pbc_val peak"
+
+
+def test_an_override_reason_admits_a_legacy_checkpoint(legacy, tmp_path):
+    out = evaluate_checkpoint(legacy, ledger_path=tmp_path / "l.jsonl", dry_run=True,
+                              override_reason="pre-rule checkpoint, for comparison")
+    assert out["selection_role"] is None
+
+
+def test_the_role_override_is_written_into_the_ledger(informational, tmp_path):
+    """Like every other override: visible in git history, or it constrains nothing."""
+    from src.ledger import read_ledger
+
+    _, path = informational
+    ledger = tmp_path / "l.jsonl"
+    evaluate_checkpoint(path, ledger_path=ledger,
+                        override_reason="deliberate look at the discarded peak")
+    rows = read_ledger(ledger)
+    assert rows, "a ledgered evaluation wrote no entry"
+    for row in rows:
+        assert row["override_reason"] == "deliberate look at the discarded peak"
+        assert row["selection_role"] == "informational"
+
+
+def test_the_ledger_records_the_role_of_a_headline_evaluation_too(trained, tmp_path):
+    """Absence of the field must not be the only way to tell headline from legacy."""
+    from src.ledger import read_ledger
+
+    _, path = trained
+    ledger = tmp_path / "l.jsonl"
+    evaluate_checkpoint(path, ledger_path=ledger)
+    rows = read_ledger(ledger)
+    assert rows
+    for row in rows:
+        assert row["selection_role"] == "headline"
+        assert row["selection_rule"] == "final_epoch"
+
+
+def test_a_spurious_override_is_still_refused_on_a_headline_checkpoint(trained,
+                                                                       tmp_path):
+    """The existing guard must not be weakened: an override with nothing to override is
+    still a mistake."""
+    from src.ledger import LedgerError
+
+    _, path = trained
+    with pytest.raises(LedgerError, match="override"):
+        evaluate_checkpoint(path, ledger_path=tmp_path / "l.jsonl",
+                            override_reason="no prior entry and a headline role")
+
+
+def test_main_refuses_an_informational_checkpoint(informational, tmp_path):
+    _, path = informational
+    with pytest.raises(EvalError, match="informational"):
+        main(["--checkpoint", str(path), "--ledger", str(tmp_path / "l.jsonl"),
+              "--dry-run"])
