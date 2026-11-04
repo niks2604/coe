@@ -25,7 +25,7 @@ import torch
 from src.config import load_config, resolve_device, run_metadata, set_seed
 from src.data.domains import load_class_mapping
 from src.data.label_space import load_label_space
-from src.data.loaders import make_train_loader, make_val_loader
+from src.data.loaders import make_train_loader, make_val_loader, seed_epoch
 from src.losses import class_weights_from, compute_loss
 from src.metrics import macro_f1_present, per_attribute_accuracy
 
@@ -228,6 +228,10 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
 
     for epoch in range(cfg.train.epochs):
         epoch_started = time.time()
+        # Pin this epoch's sample order and augmentation to (seed, epoch) alone, so
+        # neither depends on how much of the global RNG model construction consumed.
+        # Without it the three models saw different data at the same seed.
+        epoch_seeds = seed_epoch(cfg, epoch, train_loader)
         model.train()
         batch_losses: list[float] = []
         batch_class_losses: list[float] = []
@@ -255,6 +259,7 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
         schedule.step()
 
         row = {"epoch": epoch,
+               "epoch_seeds": epoch_seeds,
                "train_loss": _mean(batch_losses),
                "train_class_loss": _mean(batch_class_losses),
                "train_attribute_loss_unscaled": _mean(batch_attribute_losses),

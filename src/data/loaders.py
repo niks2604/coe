@@ -13,6 +13,7 @@ gap (CLAUDE.md sec 1).
 """
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 
 import torch
@@ -31,6 +32,46 @@ from src.data.label_space import LabelSpace
 from src.data.transforms import build_eval_transform, build_train_transform
 
 TRAIN_SPLIT = "pbc_train"
+
+
+def _epoch_seed(seed: int, epoch: int, stream: str) -> int:
+    """A stable 63-bit seed from (seed, epoch, stream), by hash not by arithmetic.
+
+    seed + epoch would make (0, 1) and (1, 0) the same stream, quietly correlating seed
+    0's second epoch with seed 1's first. The stream name keeps the sample order and the
+    augmentation draws independent of each other.
+    """
+    digest = hashlib.sha256(f"{int(seed)}:{int(epoch)}:{stream}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") >> 1
+
+
+def seed_epoch(cfg, epoch: int, loader: DataLoader | None = None) -> dict:
+    """Pin one epoch's sample order and augmentation to (cfg.seed, epoch) alone.
+
+    torchvision's random transforms draw from the global torch RNG, and RandomSampler
+    seeds itself from it too. Model construction also draws from it - by a different
+    amount for the baseline's Linear(2048, 5) head than for the bottleneck's
+    Linear(2048, 31) plus Linear(31, 5) - and build_model runs before the first epoch is
+    iterated. Without this, the three models saw different augmentations AND different
+    shuffle orders at the same seed: a protocol difference correlated with the
+    representation, which CLAUDE.md sec 5 forbids.
+
+    Called once per epoch by src.train, before iterating the train loader. Keying on the
+    epoch number rather than letting the generators advance means epoch n is the same
+    data whether it is reached first or tenth, so the stream is a pure function of
+    (seed, epoch) and not of iteration history.
+
+    Reseeding the global RNG also resets any model-side randomness per epoch; the
+    ResNet-50 backbone has no dropout, so nothing here is affected.
+
+    Returns the seeds it set, for the run record.
+    """
+    seeds = {"augmentation": _epoch_seed(cfg.seed, epoch, "augmentation"),
+             "order": _epoch_seed(cfg.seed, epoch, "order")}
+    torch.manual_seed(seeds["augmentation"])
+    if loader is not None and loader.generator is not None:
+        loader.generator.manual_seed(seeds["order"])
+    return seeds
 
 
 def _collate(batch):
@@ -111,8 +152,13 @@ def make_train_loader(cfg, mapping: ClassMapping, label_space: LabelSpace,
     dataset = _build_source(cfg, dataset_id, mapping, label_space,
                             build_train_transform(cfg), subset=True)
     dataset.augmented = True
+    # An explicit generator, seeded from the config: left to itself RandomSampler draws
+    # its seed from the global RNG, which couples the shuffle order to how much
+    # randomness model construction happened to consume.
+    generator = torch.Generator()
+    generator.manual_seed(_epoch_seed(cfg.seed, 0, "order"))
     return DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True,
-                      drop_last=False, collate_fn=_collate)
+                      drop_last=False, collate_fn=_collate, generator=generator)
 
 
 def make_val_loader(cfg, mapping: ClassMapping, label_space: LabelSpace,
