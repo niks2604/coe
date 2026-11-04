@@ -153,7 +153,7 @@ picks whichever of cuda/mps is missing, so on Kaggle it exercises the mps path.
 ## 7. Run the three wiring checks
 
 Source domain only. These select nothing — they confirm each model trains at all under
-the declared settings before the grid runs. See CLAUDE.md sec 5 for the decision rule.
+the declared settings before the headline runs. See CLAUDE.md sec 5 for the decision rule.
 
 ```bash
 %cd /kaggle/working/coe
@@ -272,7 +272,7 @@ is unrecoverable.
 | `torch.cuda.is_available()` is `False` | Kaggle's CUDA torch was replaced | Factory-reset the session; redo sec 3 without installing torch |
 | `ConfigError: ... TODO_FILL` | `paths.kaggle` not filled in | Fill it and commit (sec 0) |
 | `ConfigError: device: cuda was requested but ... is False` | No accelerator attached | Set the accelerator, restart |
-| `ConfigError: device: mps is for smoke and debug configs only` | An `mps` device on a wiring/tuning/final config | Use `cuda` on Kaggle |
+| `ConfigError: device: mps is for smoke and debug configs only` | An `mps` device on a wiring or headline config | Use `cuda` on Kaggle |
 | `WeightsUnavailableError` | No internet and no local weights | Attach weights and set `imagenet_weights` (sec 5) |
 | `LedgerError: ... already evaluated` | This checkpoint/domain pair was looked at before | Intended. Do not add `--override-reason` unless the repeat look is deliberate and justified |
 | Results written somewhere unexpected | `env` is still `local` | Set `env: kaggle` (sec 0) |

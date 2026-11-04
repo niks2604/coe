@@ -64,9 +64,11 @@ that target domain, so a 5-class figure is never subtracted from a 2-class one.
 
 **Fixed a priori**, before any target number was seen: λ = 1.0, AdamW with cosine decay
 after a short linear warmup, full fine-tune of the whole backbone, the augmentation and
-colour-jitter caps, ImageNet normalization constants, and a pre-declared 12-trial tuning
-grid run identically for all three models. Every reported number is the mean ± std over 3
-seeds.
+colour-jitter caps, and ImageNet normalization constants. No hyperparameter search is
+run: lr 3e-4, weight decay 1e-4 and class_weighting none are fixed a priori and identical
+for all three models, so every model gets a search budget of zero. The evaluated
+checkpoint is the final epoch of the declared budget, never a pbc_val peak. Every
+reported number is the mean ± std over 3 seeds.
 
 ---
 
@@ -106,10 +108,9 @@ python -m src.eval  --checkpoint results/<run>/last.pt  # evaluate
 
 Evaluation reads the resolved config embedded in the checkpoint, never a YAML passed
 alongside it, so a checkpoint cannot be evaluated under preprocessing it was not trained
-with. There are exactly three blessed flags, each of which records itself: `--dry-run`
-(evaluates `pbc_val` only, writes no ledger entry), `--override-reason "<text>"`
-(re-evaluates a ledgered pair, reason mandatory and written to the ledger), and
-single-seed tuning trials.
+with. There are exactly two blessed flags, each of which records itself: `--dry-run`
+(evaluates `pbc_val` only, writes no ledger entry) and `--override-reason "<text>"`
+(re-evaluates a ledgered pair, reason mandatory and written to the ledger).
 
 **Start with the smoke test**, which runs locally on CPU:
 
@@ -126,9 +127,9 @@ nothing whatever about whether a model trains — see the step-budget rule in CL
 | config | purpose | runs on |
 |---|---|---|
 | `smoke.yaml`, `smoke_baseline.yaml`, `smoke_control.yaml` | 500 images, 2 epochs, pipeline sanity check | local CPU |
-| `wiring_baseline.yaml`, `wiring_bottleneck.yaml`, `wiring_control.yaml` | full source domain, one mid-grid setting; confirms each model trains before the grid runs; selects nothing | Kaggle GPU |
+| `wiring_baseline.yaml`, `wiring_bottleneck.yaml`, `wiring_control.yaml` | full source domain at the declared settings; confirms each model trains before the headline runs; selects nothing | Kaggle GPU |
 | `baseline.yaml`, `bottleneck.yaml`, `control.yaml` | the headline runs | Kaggle GPU |
-| `tuning_grid.yaml` | the pre-declared 12-trial grid (axes and tie-break order) | — |
+| `tuning_grid.yaml` | a grid that was declared and is not run; kept as a record | — |
 | `audit.yaml` | read-only data audit | local |
 | `class_mapping.yaml`, `label_space.yaml` | class name mapping; committed index orderings | — |
 
@@ -203,10 +204,11 @@ Carried here from CLAUDE.md §6 because they belong in any write-up:
 - One target dataset, from a single lab network, so the shift measured is mostly camera
   and optics rather than stain protocol. The result does not generalize to stain-protocol
   shift. LISC was never obtained and is out of scope.
-- Tuning trials run at a single seed, so trial selection is exposed to seed noise.
-- Model selection happens entirely on `pbc_val`, the same domain as `pbc_train`. Nothing
-  in the tuning signal rewards domain robustness — deliberate, since the alternative is
-  leakage, but it means no configuration was chosen for its ability to generalize.
+- No hyperparameter search was run, so the three models are compared at a single
+  operating point chosen a priori rather than one shown to suit any of them.
+- Nothing in the protocol rewards domain robustness. Selection is the final epoch of a
+  fixed budget and nothing is searched, so no choice was made for its ability to
+  generalize — deliberate, since the alternative is reading the target.
 - BatchNorm running statistics are source statistics baked into the model and a known
   cause of domain-shift degradation. A GroupNorm arm is pre-declared as a secondary
   comparison, and it confounds two changes at once; see CLAUDE.md §6.

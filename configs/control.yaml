@@ -61,7 +61,7 @@ train:
   weight_decay: 0.0001
   lr_schedule: cosine         # cosine decay after a short linear warmup
   warmup_epochs: 2            # identical across all three models, never tuned
-  class_weighting: none       # none | inverse_frequency; tuned on pbc_val only
+  class_weighting: none       # none | inverse_frequency; fixed a priori
 
   # Training only, source only, and identical for baseline, bottleneck and control -
   # otherwise the three are compared across different protocols, not representations.

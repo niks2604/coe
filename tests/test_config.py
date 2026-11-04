@@ -427,7 +427,7 @@ def test_wiring_yaml_has_its_own_run_id(name):
 
 @pytest.mark.parametrize("name", WIRING_YAMLS)
 def test_wiring_yaml_matches_its_origin_in_every_protocol_field(name):
-    """The wiring check must run the declared mid-grid settings, not a variant of them:
+    """The wiring check must run the declared settings, not a variant of them:
     only run_id and device may differ from the headline config it mirrors."""
     origin = name.replace("wiring_", "")
     wiring = yaml.safe_load((_configs_dir() / name).read_text())

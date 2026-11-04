@@ -68,11 +68,10 @@ Known issues to resolve during the audit: segmented vs. band neutrophils, immatu
 
 Configs. Every experiment is fully specified by one YAML file in configs/. No hyperparameters hardcoded in Python. No CLI flags that change behaviour in ways the config doesn't record.
 
-Three blessed exceptions to the no-behavioural-flags rule, each of which records itself:
+Two blessed exceptions to the no-behavioural-flags rule, each of which records itself:
 
 src/eval.py --override-reason "<text>": re-evaluates a checkpoint/domain pair the ledger has already seen. The reason is mandatory, non-empty, and written into the ledger.
 src/eval.py --dry-run: evaluates pbc_val only, touches no held-out or target domain, and writes no ledger entry. Recorded in the results JSON. Used by the smoke test.
-Tuning trials run at a single seed. Recorded per trial.
 
 Seeding. Seed Python, NumPy, and PyTorch. Set deterministic cuDNN. The seed lives in the config. Every reported number is the mean ± std over 3 seeds unless explicitly stated otherwise.
 
@@ -94,15 +93,15 @@ Training settings fixed a priori and identical for baseline, bottleneck and cont
 Full fine-tune of the whole backbone. Not a frozen backbone, not a linear probe.
 AdamW, cosine schedule with a short linear warmup over a fixed maximum epoch count. The schedule is not tuned.
 Augmentation as in the configs, and the colour-jitter caps in src/config.py.
-lambda (bottleneck attribute loss weight) fixed at 1.0. It is not in the tuning grid: it exists only for the bottleneck, so tuning it would hand the bottleneck a larger search budget than the baseline. Any lambda exploration is a separate, labelled sweep that does not feed the headline comparison.
+lambda (bottleneck attribute loss weight) fixed at 1.0. It exists only for the bottleneck, so searching it would hand the bottleneck a search budget the baseline cannot have. Nothing is searched, so this follows from the same rule as every other hyperparameter. Any lambda exploration is a separate, labelled sweep that does not feed the headline comparison.
 
-Wiring check. Before the grid runs, each model is trained once on the full source domain at one mid-grid configuration — lr 3e-4, weight decay 1e-4, class_weighting none — for the declared maximum epoch count. It is source-only, it selects nothing, and its run_id is prefixed wiring_ so its results can never be mistaken for a grid trial. The configs are configs/wiring_{baseline,bottleneck,control}.yaml, which differ from the headline configs in run_id and device alone, and a test enforces that.
+Wiring check. Before the headline runs, each model is trained once on the full source domain at the declared configuration — lr 3e-4, weight decay 1e-4, class_weighting none — for the declared maximum epoch count. It is source-only, it selects nothing, and its run_id is prefixed wiring_ so its results can never be mistaken for a headline seed. The configs are configs/wiring_{baseline,bottleneck,control}.yaml, which differ from the headline configs in run_id and device alone, and a test enforces that.
 
-Decision rule. Pass for the bottleneck at lambda 1.0: pbc_val macro-F1 within 0.05 of the baseline, and per-attribute pbc_val accuracy above the majority-class rate on at least 9 of 11 attributes. Pass means the declared grid proceeds with lambda unchanged. On a fail: look for bugs first; if none is found, lambda becomes a supervisor-level protocol decision, logged in section 8 before any further run. A bottleneck that fails to train is a training failure, not a negative result — reporting it as evidence against the hypothesis would be wrong.
+Decision rule. Pass for the bottleneck at lambda 1.0: pbc_val macro-F1 within 0.05 of the baseline, and per-attribute pbc_val accuracy above the majority-class rate on at least 9 of 11 attributes. Pass means the headline runs proceed with lambda unchanged. On a fail: look for bugs first; if none is found, lambda becomes a supervisor-level protocol decision, logged in section 8 before any further run. A bottleneck that fails to train is a training failure, not a negative result — reporting it as evidence against the hypothesis would be wrong.
 
 Step budget. Any claim that a model does not train must state how many optimiser steps it had. Measured, on ground-truth attribute codes with everything but Linear(31,5) removed (scripts/classifier_capacity.py): 0.177 train accuracy at step 200, 0.9639 at 1,000, and 0.9895 at the declared 5,790. The classifier needs roughly a thousand steps before it is doing anything at all. The section 7 smoke test — 500 images, batch 16, 2 epochs — is 64 steps, so it can show that a pipeline runs and nothing whatever about trainability.
 
-Device. Every experiment config states device: cpu | cuda | mps. A requested device that is not available is a hard error, never a silent fall back to CPU, and the device actually resolved is recorded in the results JSON. Validation of the name is hardware-independent so a checkpoint trained on one device stays readable on another. MPS is for smoke and debug configs only: it has no deterministic-algorithm guarantee and its cuDNN flags are no-ops, so it cannot meet the seeding requirement above. src/config.py rejects it for any run_id not prefixed smoke or debug, which covers every wiring, tuning and final run.
+Device. Every experiment config states device: cpu | cuda | mps. A requested device that is not available is a hard error, never a silent fall back to CPU, and the device actually resolved is recorded in the results JSON. Validation of the name is hardware-independent so a checkpoint trained on one device stays readable on another. MPS is for smoke and debug configs only: it has no deterministic-algorithm guarantee and its cuDNN flags are no-ops, so it cannot meet the seeding requirement above. src/config.py rejects it for any run_id not prefixed smoke or debug, which covers every wiring and headline run.
 
 Checkpoint selection. The checkpoint is the final epoch of the declared budget. There is no selection among epochs: every run trains for train.epochs and the resulting model is the one evaluated, for the baseline, the bottleneck, the control and the groupnorm arm alike.
 
@@ -166,7 +165,7 @@ Mean maximum probability is reported beside ECE. ECE on its own cannot tell a co
 
 Abstention. The headline number is accuracy at 90% nominal coverage, with the threshold taken from pbc_val and applied unchanged to every domain. All seven coverage levels in the config are reported. Coverage actually achieved on a target domain will differ from nominal, and that difference is itself a result.
 
-Backbone normalisation. Two arms, both declared now: batchnorm is the headline, groupnorm is a pre-declared secondary arm, run with the same grid for all three models after the headline is complete, and reported either way. BatchNorm running statistics are source statistics baked into the model and a known cause of domain-shift degradation, so they are a live confound for this whole result — but the choice is invisible on pbc_val, which is same-domain. Picking an arm because it did better on Raabin would be target-informed model selection.
+Backbone normalisation. Two arms, both declared now: batchnorm is the headline, groupnorm is a pre-declared secondary arm, run at the same settings for all three models after the headline is complete, and reported either way. BatchNorm running statistics are source statistics baked into the model and a known cause of domain-shift degradation, so they are a live confound for this whole result — but the choice is invisible on pbc_val, which is same-domain. Picking an arm because it did better on Raabin would be target-informed model selection.
 
 What the groupnorm arm actually does, measured rather than assumed: every BatchNorm2d layer in the backbone is replaced by GroupNorm(32, channels); the pretrained BatchNorm affine parameters gamma and beta are REUSED, because GroupNorm's weight and bias carry the same names and per-channel shapes and so load from the checkpoint; the 159 running-statistic buffers (running_mean, running_var and num_batches_tracked across 53 layers) are dropped; nothing is randomly initialised; and the whole backbone is then fine-tuned as in the headline arm.
 
@@ -184,7 +183,7 @@ Known limitations of this protocol, to be stated in any write-up:
 
 One target dataset, from a single lab network, so the shift measured is mostly camera and optics (see section 1).
 No hyperparameter search was run, so the three models are compared at a single operating point chosen a priori rather than one shown to suit any of them. A configuration better for one representation than another would not have been found. Reported numbers are the mean ± std over 3 seeds.
-Model selection happens entirely on pbc_val, which is the same domain as pbc_train. Nothing in the tuning signal rewards domain robustness — which is deliberate, since the alternative is leakage, but it means no configuration was chosen for its ability to generalize.
+Nothing anywhere in the protocol rewards domain robustness. Selection is the final epoch of a fixed budget and no hyperparameter is searched, so no choice at all was made for its ability to generalize — which is deliberate, since the alternative is reading the target.
 
 Changing any of the above after a target number has been seen is a protocol change, not a tweak. Flag it to me and log it in section 8.
 
