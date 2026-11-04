@@ -176,9 +176,10 @@ def _validate(model, loader, cfg, class_weights, classes, label_space, device) -
     attribute_pred: list[list[int]] = []
 
     for images, labels, attributes in loader:
-        images, labels = images.to(device), labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         if attributes is not None:
-            attributes = attributes.to(device)
+            attributes = attributes.to(device, non_blocking=True)
         output = model(images)
         total, parts = compute_loss(output, (labels, attributes), cfg, class_weights)
         losses.append(float(total))
@@ -255,9 +256,10 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
         batch_class_losses: list = []
         batch_attribute_losses: list = []
         for images, labels, attributes in train_loader:
-            images, labels = images.to(device), labels.to(device)
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
             if attributes is not None:
-                attributes = attributes.to(device)
+                attributes = attributes.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
             output = model(images)
             total, parts = compute_loss(output, (labels, attributes), cfg, class_weights)

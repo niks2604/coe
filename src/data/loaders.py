@@ -45,6 +45,15 @@ def _epoch_seed(seed: int, epoch: int, stream: str) -> int:
     return int.from_bytes(digest[:8], "big") >> 1
 
 
+def _pin_memory(cfg) -> bool:
+    """Stage batches in pinned memory only when there is an accelerator to stage for.
+
+    Derived from cfg.device, so it is recorded in the config like every other
+    behaviour. Pinning unconditionally warns on every CPU run and buys nothing there.
+    """
+    return cfg.device == "cuda"
+
+
 def seed_epoch(cfg, epoch: int, loader: DataLoader | None = None) -> dict:
     """Pin one epoch's sample order and augmentation to (cfg.seed, epoch) alone.
 
@@ -158,7 +167,8 @@ def make_train_loader(cfg, mapping: ClassMapping, label_space: LabelSpace,
     generator = torch.Generator()
     generator.manual_seed(_epoch_seed(cfg.seed, 0, "order"))
     return DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True,
-                      drop_last=False, collate_fn=_collate, generator=generator)
+                      drop_last=False, collate_fn=_collate, generator=generator,
+                      pin_memory=_pin_memory(cfg))
 
 
 def make_val_loader(cfg, mapping: ClassMapping, label_space: LabelSpace,
@@ -168,7 +178,7 @@ def make_val_loader(cfg, mapping: ClassMapping, label_space: LabelSpace,
     dataset = _build_source(cfg, dataset_id, mapping, label_space,
                             build_eval_transform(cfg), subset=True)
     return DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=False,
-                      collate_fn=_collate)
+                      collate_fn=_collate, pin_memory=_pin_memory(cfg))
 
 
 def make_eval_loader(cfg, dataset_id: str, mapping: ClassMapping,
@@ -202,4 +212,4 @@ def make_eval_loader(cfg, dataset_id: str, mapping: ClassMapping,
         )
 
     return DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=False,
-                      collate_fn=_collate)
+                      collate_fn=_collate, pin_memory=_pin_memory(cfg))

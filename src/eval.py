@@ -186,9 +186,10 @@ def _collect(model, loader, modes: list[str], observed: dict, device) -> dict:
     attribute_pred: list[list[int]] = []
 
     for images, labels, attributes in loader:
-        images, labels = images.to(device), labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
         if attributes is not None:
-            attributes = attributes.to(device)
+            attributes = attributes.to(device, non_blocking=True)
         observed["model_training_mode_seen"] |= bool(model.training)
         observed["grad_enabled_seen"] |= bool(torch.is_grad_enabled())
 

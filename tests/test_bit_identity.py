@@ -176,3 +176,46 @@ def test_the_step_loop_reads_no_scalar_off_the_device():
     body = loop.group(2)
     assert "float(" not in body, f"a scalar is read off the device per step:\n{body}"
     assert "isfinite" in body, "the divergence guard left the step loop"
+
+
+# --- A2: pinned staging and non-blocking copies ---------------------------------------
+
+def test_loaders_pin_memory_only_where_there_is_a_device_to_pin_for(experiment_config,
+                                                                   tiny_raw_loadable,
+                                                                   mapping,
+                                                                   label_space):
+    """Derived from cfg.device, so it is recorded in the config like everything else.
+    Unconditional pinning would warn on every CPU run, where there is no accelerator to
+    stage for."""
+    from src.config import load_config
+    from src.data.loaders import make_eval_loader, make_train_loader, make_val_loader
+
+    for device, expected in (("cpu", False), ("cuda", True)):
+        cfg = load_config(experiment_config(**{"device": device,
+                                               "data.image_size": 32,
+                                               "train.batch_size": 2}))
+        for loader in (make_train_loader(cfg, mapping, label_space),
+                       make_val_loader(cfg, mapping, label_space),
+                       make_eval_loader(cfg, "pbc_test", mapping, label_space)):
+            assert loader.pin_memory is expected, (device, loader)
+
+
+def test_every_batch_transfer_is_non_blocking():
+    """Structural. A pinned batch copied with a blocking transfer buys nothing: the
+    point of pinning is that the copy can be queued and overlapped."""
+    import inspect
+    import re
+
+    import src.eval as eval_mod
+    import src.train as train_mod
+
+    for mod in (train_mod, eval_mod):
+        source = inspect.getsource(mod)
+        for match in re.finditer(r"\w+\.to\(device[^)]*\)", source):
+            call = match.group(0)
+            if "non_blocking" in call:
+                continue
+            # model.to(device) and class_weights.to(device) are one-off moves, not
+            # per-batch copies, and are not staged through pinned memory.
+            assert re.match(r"(model|class_weights)\.to\(device\)", call), \
+                f"{mod.__name__}: blocking per-batch transfer {call!r}"
