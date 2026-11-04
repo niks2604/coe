@@ -1,0 +1,113 @@
+# SEED 2 of the baseline headline run.
+#
+# Identical to baseline.yaml in every field but seed. run_id is shared across the
+# three seeds on purpose: src.train writes to <run_id>_seed<seed>, so this run
+# lands in results/baseline_seed2/, which is also this file's name. A test
+# asserts seed is the only difference - three seeds must be the same experiment
+# three times, or the mean +/- std over 3 seeds is a mean over 3 protocols.
+#
+# Run: python -m src.train --config configs/baseline_seed2.yaml
+
+# Baseline: image -> 5 classes. No attribute bottleneck.
+#
+# Run: python -m src.train --config configs/baseline.yaml
+# One file fully specifies the experiment (CLAUDE.md sec 5). No includes: a config is
+# read as-is, and the fully resolved copy is embedded in results/<run_id>.json.
+#
+# Reported numbers are the mean +/- std over 3 seeds. Change `seed` per run; nothing
+# else differs between seeds.
+
+run_id: baseline
+
+env: kaggle
+seed: 2
+device: cuda                # cpu | cuda | mps; mps is for smoke/debug only
+
+paths:
+  local:
+    pbc_images: data/raw/PBC_dataset_normal_DIB
+    wbcatt_dir: data/raw
+    raabin_root: data/raw/raabin_double_labeled
+    lisc_root: data/raw/LISC
+    results_dir: results
+  kaggle:
+    pbc_images: /kaggle/input/datasets/anikakrishnaa/pbc-images/PBC_dataset_normal_DIB
+    wbcatt_dir: /kaggle/input/datasets/anikakrishnaa/wbcatt
+    raabin_root: /kaggle/input/datasets/anikakrishnaa/raabin-double-labeled
+    lisc_root: /kaggle/input/datasets/anikakrishnaa/lisc   # out of scope; expected absent
+    results_dir: /kaggle/working/results
+
+data:
+  class_mapping: configs/class_mapping.yaml
+  label_space: configs/label_space.yaml   # fixes what class/attribute index 0 MEANS
+  source: pbc_wbcatt          # the 10,298 WBCAtt-labelled PBC images, WBCAtt's splits
+  image_size: 224
+  subset_n_images: null       # set to 500 for the sec 7 smoke test
+  normalization:              # fixed ImageNet constants, never computed from data
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+model:
+  type: baseline
+  backbone: resnet50
+  backbone_norm: batchnorm   # headline arm; groupnorm is the secondary arm
+  # null downloads them. On Kaggle, attach the weights as a dataset and point
+  # this at the /kaggle/input path. Neither available is a hard error - it is
+  # never a silent fall back to random init (CLAUDE.md sec 5).
+  imagenet_weights: null
+
+train:
+  epochs: 30
+  batch_size: 32
+  lr: 0.0003
+  optimizer: adamw            # fixed a priori; not a tuned axis
+  weight_decay: 0.0001
+  lr_schedule: cosine         # cosine decay after a short linear warmup
+  warmup_epochs: 2            # identical across all three models, never tuned
+  class_weighting: none       # none | inverse_frequency; fixed a priori
+
+  # Training only, source only, and identical for baseline, bottleneck and control -
+  # otherwise the three are compared across different protocols, not representations.
+  # Blood smears have no canonical orientation, so flips and full rotation preserve
+  # both the class and all 11 attributes.
+  augmentation:
+    hflip: 0.5
+    vflip: 0.5
+    rotation_degrees: 180
+    # Stain colour variation IS the shift being measured, so these are fixed a priori
+    # and never tuned; src/config.py caps them. Raising a cap is a protocol change.
+    color_jitter:
+      brightness: 0.1
+      contrast: 0.1
+      saturation: 0.1
+      hue: 0.02
+
+
+eval:
+  # Three separate Raabin domains; no pooled Raabin headline number.
+  # LISC was never obtained and is out of scope (CLAUDE.md sec 2).
+  domains: [pbc_test, raabin_train, raabin_testA, raabin_testB]
+
+  secondary_subsets: [pbc_test_no_band_neutrophils]
+  abstention:
+    threshold_split: pbc_val  # the threshold is chosen on source val, never on target
+    coverage_grid: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+  ece_bins: 15
+  macro_f1_over: present_classes   # raabin_testB has 2 of 5 classes; see src/config.py
+
+bootstrap:
+  enabled: true
+  n: 2000
+  ci: 0.95
+  stratify_by: class
+  resample_domains_independently: true
+
+selection:
+  # The evaluated checkpoint is the final epoch of the declared budget. pbc_val cannot
+  # support an argmax over epochs, and a per-model argmax selected the three models at
+  # different points on their own learning curves (CLAUDE.md sec 5).
+  rule: final_epoch
+  report_metric: val_macro_f1   # recorded per epoch; selects nothing
+  # Reads the TRAINING loss. A guard on a falling val metric would be epoch selection
+  # under another name. A run that fires it yields no checkpoint at all.
+  divergence_guard: non_finite_loss

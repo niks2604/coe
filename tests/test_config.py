@@ -288,9 +288,18 @@ def test_audit_config_rejects_unknown_keys(audit_config):
 # --- the committed experiment YAMLs state the protocol fields explicitly ----------
 
 EXPERIMENT_YAMLS = ("baseline.yaml", "bottleneck.yaml", "control.yaml",
+                    "baseline_seed1.yaml", "bottleneck_seed1.yaml",
+                    "control_seed1.yaml",
+                    "baseline_seed2.yaml", "bottleneck_seed2.yaml",
+                    "control_seed2.yaml",
                     "smoke.yaml", "smoke_baseline.yaml", "smoke_control.yaml",
                     "wiring_baseline.yaml", "wiring_bottleneck.yaml",
                     "wiring_control.yaml")
+
+# The nine final runs: three models at three seeds. seed 0 keeps the original name.
+SEED_YAMLS = {f"{model}_seed{seed}.yaml": (f"{model}.yaml", seed)
+              for model in ("baseline", "bottleneck", "control")
+              for seed in (1, 2)}
 
 WIRING_YAMLS = ("wiring_baseline.yaml", "wiring_bottleneck.yaml", "wiring_control.yaml")
 
@@ -568,3 +577,69 @@ def test_the_three_headline_configs_share_their_selection_block():
             for n in ("baseline.yaml", "bottleneck.yaml", "control.yaml")}
     values = {n: doc["selection"] for n, doc in docs.items()}
     assert len(set(map(str, values.values()))) == 1, values
+
+
+# --- the nine final runs --------------------------------------------------------------
+
+@pytest.mark.parametrize("name", sorted(SEED_YAMLS))
+def test_seed_yaml_differs_from_its_origin_only_in_seed_and_run_id(name):
+    """Three seeds of one model must be the same experiment three times. Anything else
+    differing would make the mean +/- std over 3 seeds a mean over 3 protocols."""
+    origin, _ = SEED_YAMLS[name]
+    here = yaml.safe_load((_configs_dir() / name).read_text())
+    there = yaml.safe_load((_configs_dir() / origin).read_text())
+    differing = {k for k in set(here) | set(there) if here.get(k) != there.get(k)}
+    assert differing <= {"seed", "run_id"}, f"{name} vs {origin}: {differing}"
+    assert differing, f"{name} is identical to {origin}"
+
+
+@pytest.mark.parametrize("name", sorted(SEED_YAMLS))
+def test_seed_yaml_declares_the_seed_its_filename_says(name):
+    _, seed = SEED_YAMLS[name]
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert doc["seed"] == seed, name
+
+
+@pytest.mark.parametrize("name", sorted(SEED_YAMLS))
+def test_seed_yaml_keeps_its_origin_run_id(name):
+    """run_id is shared across the seeds of one model on purpose: src.train writes to
+    <run_id>_seed<seed>, so run_id 'baseline' with seed 1 gives results/baseline_seed1,
+    which is also this config's basename. A run_id of 'baseline_seed1' would give
+    baseline_seed1_seed1."""
+    origin, _ = SEED_YAMLS[name]
+    here = yaml.safe_load((_configs_dir() / name).read_text())
+    there = yaml.safe_load((_configs_dir() / origin).read_text())
+    assert here["run_id"] == there["run_id"], name
+
+
+def test_no_two_experiment_configs_can_write_to_the_same_results_path():
+    """src.train writes results/<run_id>_seed<seed>/. Two configs resolving to one
+    directory would have the second silently overwrite the first's checkpoint."""
+    seen: dict[str, str] = {}
+    for name in EXPERIMENT_YAMLS:
+        doc = yaml.safe_load((_configs_dir() / name).read_text())
+        key = f"{doc['run_id']}_seed{doc['seed']}"
+        assert key not in seen, f"{name} and {seen[key]} both write to {key}/"
+        seen[key] = name
+    assert len(seen) == len(EXPERIMENT_YAMLS)
+
+
+def test_the_nine_final_runs_exist_and_cover_three_seeds_each():
+    paths = {}
+    for model in ("baseline", "bottleneck", "control"):
+        for seed in (0, 1, 2):
+            name = f"{model}.yaml" if seed == 0 else f"{model}_seed{seed}.yaml"
+            path = _configs_dir() / name
+            assert path.is_file(), f"missing {name}"
+            cfg = load_config(path)
+            assert cfg.seed == seed, name
+            paths[(model, seed)] = f"{cfg.run_id}_seed{cfg.seed}"
+    assert len(set(paths.values())) == 9, paths
+
+
+@pytest.mark.parametrize("name", sorted(SEED_YAMLS))
+def test_seed_yaml_runs_on_the_kaggle_gpu_like_its_origin(name):
+    """Covered by the globbing policy test too; asserted here so a failure names the
+    seed config rather than a glob."""
+    doc = yaml.safe_load((_configs_dir() / name).read_text())
+    assert doc["env"] == "kaggle" and doc["device"] == "cuda", name

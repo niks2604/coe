@@ -11,30 +11,22 @@ Read section 0 before booking any GPU time. Two things in it are blockers.
 
 ## 0. Blockers and prerequisites
 
-### 0.1 BLOCKER — there is no way to run seed 1 or seed 2
+### 0.1 RESOLVED — the nine configs
 
-`seed` lives in the YAML (`configs/baseline.yaml:13`, `bottleneck.yaml:17`,
-`control.yaml:17`), all three at `seed: 0`. CLAUDE.md §5 forbids a CLI flag that changes
-behaviour the config does not record, and the reproducibility bar is
-`python -m src.train --config configs/<x>.yaml` with no other arguments. So the nine runs
-need **nine configs**, and six of them do not exist:
+`seed` lives in the YAML and CLAUDE.md §5 forbids a CLI flag that changes behaviour the
+config does not record, so each of the nine runs is its own config. Seed 0 keeps the
+original names; seeds 1 and 2 are new files differing in `seed` alone:
 
-```
-configs/baseline_seed1.yaml    configs/bottleneck_seed1.yaml    configs/control_seed1.yaml
-configs/baseline_seed2.yaml    configs/bottleneck_seed2.yaml    configs/control_seed2.yaml
-```
+| model | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| baseline | `baseline.yaml` | `baseline_seed1.yaml` | `baseline_seed2.yaml` |
+| bottleneck | `bottleneck.yaml` | `bottleneck_seed1.yaml` | `bottleneck_seed2.yaml` |
+| control | `control.yaml` | `control_seed1.yaml` | `control_seed2.yaml` |
 
-Each would differ from its seed-0 original in `seed` alone — not `run_id`, since the
-output directory is already `<results_dir>/<run_id>_seed<seed>` and the three seeds of
-one model are meant to be the same run at different seeds. A test should assert exactly
-that, in the style of `test_wiring_yaml_matches_its_origin_in_every_protocol_field`.
-
-The alternative — a `seeds: [0, 1, 2]` list in one config, with the training script
-looping — changes `src/train.py` and the results layout, and makes one Kaggle session
-responsible for three runs with no checkpoint between them. Six small configs is the
-smaller diff against a working system.
-
-**This is a decision, not a task. Nothing below can run until it is made.**
+`run_id` is shared across the three seeds of a model, so `src.train` writes to
+`results/<model>_seed<N>/` — which for seeds 1 and 2 is also the config's own basename.
+Tests assert `seed` is the only field that differs, and that no two experiment configs
+can resolve to the same results directory.
 
 ### 0.2 BLOCKER — `src/eval.py` writes no results JSON
 
@@ -150,15 +142,13 @@ print(torch.cuda.get_device_name(0))
 
 ```python
 SEED = 0          # 0, 1 or 2 — the ONLY edit between the three notebooks
-CONFIGS = [f"configs/baseline_seed{SEED}.yaml",
-           f"configs/bottleneck_seed{SEED}.yaml",
-           f"configs/control_seed{SEED}.yaml"]
+SUFFIX = "" if SEED == 0 else f"_seed{SEED}"
+CONFIGS = [f"configs/{m}{SUFFIX}.yaml" for m in ("baseline", "bottleneck", "control")]
 print(CONFIGS)
 ```
 
-With seed 0 those are the existing `baseline.yaml`, `bottleneck.yaml`,
-`control.yaml` unless 0.1 renames them. Decide that once and keep the naming uniform, so
-this cell is the same text in all three notebooks.
+Seed 0 uses the original filenames, seeds 1 and 2 the `_seed<N>` ones, so this cell is
+the same text in all three notebooks and only `SEED` changes.
 
 ### Cell 3 — the test suite
 
@@ -185,7 +175,7 @@ timing and output for, and if the third run dies you want the first two's output
 unambiguous.
 
 ```bash
-!cd /kaggle/working/<repo> && python -m src.train --config configs/baseline_seed0.yaml
+!cd /kaggle/working/<repo> && python -m src.train --config configs/baseline.yaml
 ```
 
 Each prints its final-epoch `val_macro_f1`, the selected epoch, per-epoch seconds and the
