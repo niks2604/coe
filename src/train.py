@@ -147,6 +147,22 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else float("nan")
 
 
+def _detach(value):
+    """parts["attribute"] is a plain 0.0 when lambda is 0, not a tensor."""
+    return value.detach() if torch.is_tensor(value) else value
+
+
+def _floats(scalars: list) -> list[float]:
+    """Read a batch of 0-d tensors off the device, once, after the epoch.
+
+    float() on a CUDA tensor synchronises, and src/train.py did three of those per step
+    - 579 per epoch on pbc_train - each blocking the CPU until the GPU had finished.
+    Deferring them keeps the per-batch values and _mean's float64 summation order
+    exactly as they were, which is why this moves no number (tests/test_bit_identity).
+    """
+    return [float(v) for v in scalars]
+
+
 def _validate(model, loader, cfg, class_weights, classes, label_space, device) -> dict:
     """pbc_val only. Called with the model in eval mode so batch statistics are frozen."""
     was_training = model.training
@@ -233,9 +249,11 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
         # Without it the three models saw different data at the same seed.
         epoch_seeds = seed_epoch(cfg, epoch, train_loader)
         model.train()
-        batch_losses: list[float] = []
-        batch_class_losses: list[float] = []
-        batch_attribute_losses: list[float] = []
+        # 0-d tensors, not floats: converting here would synchronise on every step.
+        # 193 scalars per epoch on pbc_train, so the memory is immaterial.
+        batch_losses: list = []
+        batch_class_losses: list = []
+        batch_attribute_losses: list = []
         for images, labels, attributes in train_loader:
             images, labels = images.to(device), labels.to(device)
             if attributes is not None:
@@ -245,13 +263,18 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
             total, parts = compute_loss(output, (labels, attributes), cfg, class_weights)
             total.backward()
             optimizer.step()
-            batch_losses.append(float(total))
-            batch_class_losses.append(float(parts["class"]))
-            batch_attribute_losses.append(float(parts["attribute"]))
+            batch_losses.append(total.detach())
+            batch_class_losses.append(_detach(parts["class"]))
+            batch_attribute_losses.append(_detach(parts["attribute"]))
             # The guard, and the only thing that stops a run early. It reads the
             # TRAINING loss: stopping on a falling validation metric would be epoch
             # selection under another name (CLAUDE.md sec 5).
-            if not math.isfinite(batch_losses[-1]):
+            #
+            # This one read per step is deliberate and is NOT deferred: a run that has
+            # gone non-finite must stop at the step it happened, not at the end of the
+            # epoch, and torch.isfinite keeps the check on-device so only a single
+            # boolean crosses back.
+            if not bool(torch.isfinite(batch_losses[-1])):
                 diverged_at = epoch
                 break
         if diverged_at is not None:
@@ -260,9 +283,9 @@ def train(cfg, mapping, label_space, out_dir: Path) -> dict:
 
         row = {"epoch": epoch,
                "epoch_seeds": epoch_seeds,
-               "train_loss": _mean(batch_losses),
-               "train_class_loss": _mean(batch_class_losses),
-               "train_attribute_loss_unscaled": _mean(batch_attribute_losses),
+               "train_loss": _mean(_floats(batch_losses)),
+               "train_class_loss": _mean(_floats(batch_class_losses)),
+               "train_attribute_loss_unscaled": _mean(_floats(batch_attribute_losses)),
                "lr": optimizer.param_groups[0]["lr"]}
         row.update(_validate(model, val_loader, cfg, class_weights, classes,
                              label_space, device))

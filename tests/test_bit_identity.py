@@ -154,3 +154,25 @@ def test_the_golden_records_what_its_numbers_depend_on():
     assert golden["overrides"] == MICRO
     assert set(golden["runs"]) == set(CONFIGS)
     assert all(rows for rows in golden["runs"].values()), "a golden with no history"
+
+
+# --- A1: nothing is read off the device inside the step loop ---------------------------
+
+def test_the_step_loop_reads_no_scalar_off_the_device():
+    """Structural, in the style of test_selection_reads_no_monitoring_key. float() on a
+    CUDA tensor synchronises; three per step is 579 blocking waits per pbc_train epoch.
+    The one isfinite() check is deliberate - a diverged run must stop at the step it
+    happened - and keeps the comparison on-device.
+    """
+    import inspect
+    import re
+
+    import src.train as train_mod
+
+    source = inspect.getsource(train_mod.train)
+    loop = re.search(r"\n( +)for images, labels, attributes in train_loader:\n"
+                     r"((?:\1 +.*\n|\n)+)", source)
+    assert loop, "could not locate the step loop in train()"
+    body = loop.group(2)
+    assert "float(" not in body, f"a scalar is read off the device per step:\n{body}"
+    assert "isfinite" in body, "the divergence guard left the step loop"
