@@ -122,7 +122,9 @@ selection:
   report_metric: val_macro_f1   # recorded per epoch; selects nothing
   divergence_guard: non_finite_loss
 
-Tuning. A pre-declared grid in configs/tuning_grid.yaml, with an explicit tie-break order, run identically for all three models with the same number of trials. Selection is on pbc_val macro-F1 at the final epoch, since that is the checkpoint the trial produces. Trial selection and checkpoint selection are different things: a trial still chooses between configurations on pbc_val, and within a trial no epoch is chosen. The grid file plus a trial index specifies a trial; each run still embeds its own fully resolved config.
+Hyperparameters. No search is run. lr 3e-4, weight decay 1e-4 and class_weighting none are fixed a priori, identically for all three models and both normalisation arms, and are recorded in each config. The equal-search-budget requirement that a grid was meant to satisfy is satisfied trivially: every model gets a budget of zero. configs/tuning_grid.yaml and src/tuning.py are retained unused, as a record of what was declared and not run.
+
+The wiring runs happened to use these same values, because they were declared as the mid-grid point of the grid that was never run. They are not counted as headline seeds: they ran under the old selection rule, so seed 0 is rerun under the final-epoch rule like every other seed.
 
 ImageNet weights. The backbone needs pretrained ResNet-50 weights. Either the environment has internet access, or the weights are supplied locally (on Kaggle, as an attached dataset). If neither is available the run fails with a clear message naming both options — it never silently trains from random initialisation, which would look like a weak result rather than a setup error.
 
@@ -181,7 +183,7 @@ Raabin's basophils come from a single leukemia patient. Any basophil recall on a
 Known limitations of this protocol, to be stated in any write-up:
 
 One target dataset, from a single lab network, so the shift measured is mostly camera and optics (see section 1).
-Tuning trials run at a single seed, so trial selection is exposed to seed noise and may pick a lucky configuration. Reported numbers are still the mean ± std over 3 seeds.
+No hyperparameter search was run, so the three models are compared at a single operating point chosen a priori rather than one shown to suit any of them. A configuration better for one representation than another would not have been found. Reported numbers are the mean ± std over 3 seeds.
 Model selection happens entirely on pbc_val, which is the same domain as pbc_train. Nothing in the tuning signal rewards domain robustness — which is deliberate, since the alternative is leakage, but it means no configuration was chosen for its ability to generalize.
 
 Changing any of the above after a target number has been seen is a protocol change, not a tweak. Flag it to me and log it in section 8.
