@@ -1,0 +1,135 @@
+{
+  "environment": {
+    "device": "cpu",
+    "machine": "arm64",
+    "system": "Darwin",
+    "torch": "2.7.0"
+  },
+  "overrides": {
+    "data.image_size": 64,
+    "data.subset_n_images": 32,
+    "train.batch_size": 8,
+    "train.epochs": 1,
+    "train.warmup_epochs": 0
+  },
+  "runs": {
+    "smoke.yaml": [
+      {
+        "epoch": 0,
+        "epoch_seeds": {
+          "augmentation": 8180066162294866425,
+          "order": 1309178183502366395
+        },
+        "lr": 0.0,
+        "monitor_val_per_attribute": {
+          "cell_shape": {
+            "accuracy": 0.625,
+            "balanced_accuracy": 0.4166666666666667,
+            "majority_rate": 0.75,
+            "n_values_present": 2
+          },
+          "cell_size": {
+            "accuracy": 0.34375,
+            "balanced_accuracy": 0.5,
+            "majority_rate": 0.65625,
+            "n_values_present": 2
+          },
+          "chromatin_density": {
+            "accuracy": 0.84375,
+            "balanced_accuracy": 0.48214285714285715,
+            "majority_rate": 0.875,
+            "n_values_present": 2
+          },
+          "cytoplasm_colour": {
+            "accuracy": 0.5,
+            "balanced_accuracy": 0.3530701754385965,
+            "majority_rate": 0.59375,
+            "n_values_present": 3
+          },
+          "cytoplasm_texture": {
+            "accuracy": 0.5,
+            "balanced_accuracy": 0.36363636363636365,
+            "majority_rate": 0.6875,
+            "n_values_present": 2
+          },
+          "cytoplasm_vacuole": {
+            "accuracy": 0.84375,
+            "balanced_accuracy": 0.6149425287356322,
+            "majority_rate": 0.90625,
+            "n_values_present": 2
+          },
+          "granularity": {
+            "accuracy": 0.65625,
+            "balanced_accuracy": 0.6012145748987854,
+            "majority_rate": 0.59375,
+            "n_values_present": 2
+          },
+          "granule_colour": {
+            "accuracy": 0.375,
+            "balanced_accuracy": 0.35943223443223443,
+            "majority_rate": 0.40625,
+            "n_values_present": 4
+          },
+          "granule_type": {
+            "accuracy": 0.125,
+            "balanced_accuracy": 0.12179487179487179,
+            "majority_rate": 0.40625,
+            "n_values_present": 4
+          },
+          "nuclear_cytoplasmic_ratio": {
+            "accuracy": 0.375,
+            "balanced_accuracy": 0.5833333333333334,
+            "majority_rate": 0.75,
+            "n_values_present": 2
+          },
+          "nucleus_shape": {
+            "accuracy": 0.25,
+            "balanced_accuracy": 0.17857142857142858,
+            "majority_rate": 0.25,
+            "n_values_present": 6
+          }
+        },
+        "n_val": 32,
+        "train_attribute_loss_unscaled": 10.505976438522339,
+        "train_class_loss": 1.6231221854686737,
+        "train_loss": 12.129098415374756,
+        "val_attribute_loss_unscaled": 10.410246133804321,
+        "val_class_loss": 1.6374967694282532,
+        "val_loss": 12.04774284362793,
+        "val_macro_f1": 0.07179487179487179,
+        "val_present_classes": [
+          "neutrophil",
+          "lymphocyte",
+          "monocyte",
+          "eosinophil",
+          "basophil"
+        ]
+      }
+    ],
+    "smoke_baseline.yaml": [
+      {
+        "epoch": 0,
+        "epoch_seeds": {
+          "augmentation": 8180066162294866425,
+          "order": 1309178183502366395
+        },
+        "lr": 0.0,
+        "n_val": 32,
+        "train_attribute_loss_unscaled": 0.0,
+        "train_class_loss": 1.6529604196548462,
+        "train_loss": 1.6529604196548462,
+        "val_attribute_loss_unscaled": 0.0,
+        "val_class_loss": 1.5920502841472626,
+        "val_loss": 1.5920502841472626,
+        "val_macro_f1": 0.24761904761904763,
+        "val_present_classes": [
+          "neutrophil",
+          "lymphocyte",
+          "monocyte",
+          "eosinophil",
+          "basophil"
+        ]
+      }
+    ]
+  }
+}
