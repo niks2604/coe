@@ -104,7 +104,25 @@ Step budget. Any claim that a model does not train must state how many optimiser
 
 Device. Every experiment config states device: cpu | cuda | mps. A requested device that is not available is a hard error, never a silent fall back to CPU, and the device actually resolved is recorded in the results JSON. Validation of the name is hardware-independent so a checkpoint trained on one device stays readable on another. MPS is for smoke and debug configs only: it has no deterministic-algorithm guarantee and its cuDNN flags are no-ops, so it cannot meet the seeding requirement above. src/config.py rejects it for any run_id not prefixed smoke or debug, which covers every wiring, tuning and final run.
 
-Tuning. A pre-declared grid in configs/tuning_grid.yaml, with an explicit tie-break order, run identically for all three models with the same number of trials. Selection is on pbc_val macro-F1. The grid file plus a trial index specifies a trial; each run still embeds its own fully resolved config.
+Checkpoint selection. The checkpoint is the final epoch of the declared budget. There is no selection among epochs: every run trains for train.epochs and the resulting model is the one evaluated, for the baseline, the bottleneck, the control and the groupnorm arm alike.
+
+The reason is that pbc_val cannot support an argmax over epochs. It is 1,030 images with lymphocyte at 111 and basophil at 125, so one image moves a per-class recall by 0.009 and macro-F1 by about 0.002, while an argmax over 30 epochs is biased upward by construction — it reports the maximum of thirty noisy draws. Worse, the models saturate at different epochs, so a per-model argmax selected the baseline at epoch 0, still inside the linear warmup at lr 1e-4 after 193 steps, against the bottleneck at epoch 11. A gap measured between a model that has barely started and one that has trained twelve epochs is not a comparison of representations, and this section requires that differences between the three come from the representation and not the protocol. The bias also ran in the dangerous direction: under-training the baseline flatters the bottleneck, which is the hypothesis this project is supposed to be able to reject.
+
+The cost is accepted knowingly. A genuinely better intermediate checkpoint is discarded when one exists, and every run pays the full epoch budget. Equal training length for all three models is worth both.
+
+best.pt is still written alongside last.pt, and the per-epoch history is still recorded, so the discarded alternative stays visible. best.pt is informational and is never the evaluated checkpoint; each payload records which rule produced it, so a results JSON and a ledger line always name the file that was actually read.
+
+Divergence guard. Patience-based early stopping is removed. What remains fires only on a non-finite training loss, and when it fires the run is marked failed and yields no headline checkpoint. That keeps the guard outside selection: a guard that stopped on a falling validation metric would be epoch selection under another name.
+
+Recorded in the config. The rule is a field in every experiment YAML, not a module constant in src/train.py, because no behaviour may depend on something the config does not record.
+
+yaml
+selection:
+  rule: final_epoch          # the evaluated checkpoint; not a tuned axis
+  report_metric: val_macro_f1   # recorded per epoch; selects nothing
+  divergence_guard: non_finite_loss
+
+Tuning. A pre-declared grid in configs/tuning_grid.yaml, with an explicit tie-break order, run identically for all three models with the same number of trials. Selection is on pbc_val macro-F1 at the final epoch, since that is the checkpoint the trial produces. Trial selection and checkpoint selection are different things: a trial still chooses between configurations on pbc_val, and within a trial no epoch is chosen. The grid file plus a trial index specifies a trial; each run still embeds its own fully resolved config.
 
 ImageNet weights. The backbone needs pretrained ResNet-50 weights. Either the environment has internet access, or the weights are supplied locally (on Kaggle, as an attached dataset). If neither is available the run fails with a clear message naming both options — it never silently trains from random initialisation, which would look like a weak result rather than a setup error.
 
@@ -134,7 +152,7 @@ Per-class recall is null, not zero, for a class absent from an eval set. Zero re
 
 Attributes. Per-attribute accuracy and per-attribute balanced accuracy, on pbc_test only — Raabin has no attribute labels. Balanced accuracy as well as accuracy because the attribute vocabularies are imbalanced (granule_type runs nil 2631 against coarse 1216), and plain accuracy would hide a head that has learned only the majority value. The attribute cross-entropy itself is unweighted.
 
-Monitoring exception. Per-attribute accuracy is also computed on pbc_val once per epoch, for monitoring only. It is what makes "the attribute heads fit perfectly and the class head is stuck" visible while a run is in progress instead of after it. It is recorded under a monitor_ prefixed key, it is never reported as a result, and nothing may select on it — selection is pbc_val macro-F1 and nothing else, and a test asserts the selector reads no monitor_ key.
+Monitoring exception. Per-attribute accuracy is also computed on pbc_val once per epoch, for monitoring only. It is what makes "the attribute heads fit perfectly and the class head is stuck" visible while a run is in progress instead of after it. It is recorded under a monitor_ prefixed key, it is never reported as a result, and nothing may select on it. Under the final-epoch rule no epoch is selected at all, so this applies to trial selection, which reads pbc_val macro-F1 and nothing else; a test asserts the selector reads no monitor_ key.
 
 The majority-class rate is reported next to accuracy and balanced accuracy, because "above the majority rate" is the wiring check's bar and a head that always answers the majority value ties it exactly. Reporting the rate makes the weakness of that bar visible rather than leaving it to be recomputed.
 
