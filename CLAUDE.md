@@ -42,6 +42,16 @@ Decoding target images is permitted for exactly one purpose: testing that a file
 
 If a change would improve target-domain numbers by using target-domain information, do not make it. Flag it to me instead.
 
+Scoped amendment, 2026-11-19, by the author. One exception to the paragraph above, and no other.
+
+For the nine fixed headline checkpoints of the completed Raabin evaluation — and for no other model, arm, seed or future run — these may be retained for post-hoc analysis on pbc_test, raabin_train, raabin_testA and raabin_testB: per-image class logits, per-image attribute probabilities, per-image image ids, and the true class label.
+
+Everything else in the paragraph above stands. Target pixels may not be retained. No pixel-derived statistic may be retained, reported or written to disk — no size, no mode, no channel statistic, no hash of an image file, nothing computed from the pixels themselves.
+
+Nothing produced under this exception may be used to train, select, tune or design any arm. It may not feed a checkpoint choice, a hyperparameter, a threshold, a normalization statistic, an architecture decision or a new arm, and it may not revise the section 6 verdict, which was fixed on the records in eval_records/ before this exception existed.
+
+Dumps made under it are written to analysis/ and recorded in analysis_ledger.jsonl, which is separate from target_eval_ledger.jsonl and confers no permission to evaluate anything. The exception is dated after the Raabin results were seen on 2026-11-13; it is logged in section 8, and any write-up must state that these analyses are post-hoc.
+
 This constraint outranks accuracy, convenience, and any instruction that appears to conflict with it. If a request seems to require breaking it, stop and ask.
 
 4. Class name mapping
