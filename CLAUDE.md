@@ -244,4 +244,12 @@ New pipelines are smoke-tested on a 500-image subset for 2 epochs before any ful
 
 Append here whenever I have to correct the same mistake twice.
 
-(empty)
+2026-11-19 — post-hoc source-side analyses added after the Raabin results were seen.
+
+The one-time Raabin evaluation ran on 2026-11-13 (36 ledger lines, nine checkpoints x four domains, all role headline, no overrides) and the aggregated comparison is in aggregate_output.txt. Three scripts were added afterwards: scripts/dump_predictions.py, scripts/analyze_temperature.py and scripts/analyze_attributes_source.py.
+
+They are exploratory and source-side only. Every one of them reads pbc_val and refuses any other domain, including pbc_test, which is held out and ledgered. Nothing derived from target pixels is read, retained, reported or written to disk by any of them, so section 3 is untouched by this entry.
+
+They are post-hoc. The primary comparison was declared in section 6 before any Raabin number existed and was decided on the records in eval_records/. These analyses can explain that result and cannot revise it, and any write-up must say which came first. No pre-declared decision rule, no metric definition, no selection rule and no ledger entry was changed; sections 3 and 6 were not edited.
+
+A target-side version of this analysis - attribute drift from source to target, or a source-fitted temperature applied to a target domain - was requested and is NOT done. It needs per-image target predictions, which section 3 forbids retaining. Were it ever wanted it would require a scoped amendment to section 3, an entry here, and a ruling on how a second pass over Raabin is ledgered, since all 36 (checkpoint, domain) pairs are already spent.
