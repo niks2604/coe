@@ -263,3 +263,21 @@ They are exploratory and source-side only. Every one of them reads pbc_val and r
 They are post-hoc. The primary comparison was declared in section 6 before any Raabin number existed and was decided on the records in eval_records/. These analyses can explain that result and cannot revise it, and any write-up must say which came first. No pre-declared decision rule, no metric definition, no selection rule and no ledger entry was changed; sections 3 and 6 were not edited.
 
 A target-side version of this analysis - attribute drift from source to target, or a source-fitted temperature applied to a target domain - was requested and is NOT done. It needs per-image target predictions, which section 3 forbids retaining. Were it ever wanted it would require a scoped amendment to section 3, an entry here, and a ruling on how a second pass over Raabin is ledgered, since all 36 (checkpoint, domain) pairs are already spent.
+
+2026-11-19 — scoped section 3 amendment, and the target-side analyses it permits.
+
+The author amended section 3 the same day, after the entry above was written. The amendment is scoped to the nine fixed headline checkpoints and permits retaining per-image class logits, attribute probabilities, image ids and true class labels on pbc_test and the three Raabin domains. Pixels and every pixel-derived statistic remain forbidden, and nothing produced may train, select, tune or design any arm.
+
+Everything done under it is post-hoc. The Raabin results were seen on 2026-11-13; the amendment is dated 2026-11-19, six days later. The section 6 verdict was fixed on the records in eval_records/ before the amendment existed and is not revised by anything here: on the headline domains delta_bb was mixed on raabin_train and not supported on raabin_testA, and that stands. These analyses can explain that result and cannot change it. Any write-up must say which came first.
+
+The analyses are pre-declared here, before they were run:
+
+scripts/dump_target_predictions.py — per-image dumps for the nine checkpoints on pbc_test, raabin_train, raabin_testA and raabin_testB, written to analysis/ and recorded in analysis_ledger.jsonl. It never touches target_eval_ledger.jsonl or eval_records/.
+
+scripts/check_dump_consistency.py — recomputes macro-F1 and ECE from each dump through src.metrics and compares them with the matching eval_records entry, failing loudly on any mismatch. A dump that does not reproduce the ledgered evaluation is a broken dump, and no analysis may be read off it.
+
+scripts/analyze_attribute_drift.py — bottleneck checkpoints only. Jensen-Shannon distance, per class and per attribute, between the mean predicted attribute distribution on pbc_test and on each Raabin domain. All attributes, all seeds, ranked, nothing filtered out. The control is excluded because its heads are unsupervised at lambda 0 and are not attribute predictions.
+
+scripts/analyze_temperature_transfer.py — a sibling of analyze_temperature.py, which keeps its pbc_val-only guarantee. The temperature is still fitted on pbc_val alone and is then applied to each Raabin domain's logits, with ECE before and after, for all three model types. Fitting on a target domain is not done and is not permitted by the amendment.
+
+None of these selects anything. The nine checkpoints are fixed and were chosen by the final-epoch rule before any of this existed.
