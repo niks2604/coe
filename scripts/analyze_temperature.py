@@ -86,6 +86,18 @@ def _nll(logits: np.ndarray, y_true: np.ndarray, temperature: float) -> float:
     return float(np.mean(log_partition - shifted[np.arange(len(y_true)), y_true]))
 
 
+def at_search_bound(temperature: float, lo: float = 0.05, hi: float = 10.0,
+                    atol: float = 1e-3) -> bool:
+    """True when the fit landed on an end of the search interval.
+
+    Then the interval is the answer, not the data: the NLL was still falling when the
+    search ran out of room, so the reported temperature is clipped rather than fitted.
+    Flagged rather than silently widened, because a temperature of exactly the bound
+    reads like a fitted value and is not one.
+    """
+    return abs(temperature - lo) < atol or abs(temperature - hi) < atol
+
+
 def fit_temperature(logits: np.ndarray, y_true: np.ndarray,
                     lo: float = 0.05, hi: float = 10.0,
                     iterations: int = 100) -> float:
@@ -128,6 +140,7 @@ def temperature_report(analysis_dir: str | Path) -> dict:
             "class_logits_mode": meta.get("class_logits_mode"),
             "n": int(len(y_true)),
             "temperature": temperature,
+            "at_search_bound": at_search_bound(temperature),
             "ece_before": ece_of(logits, y_true),
             "ece_after": ece_of(logits / temperature, y_true),
             "nll_before": _nll(logits, y_true, 1.0),
